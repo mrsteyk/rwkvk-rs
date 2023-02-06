@@ -672,7 +672,7 @@ fn main() -> Result<()> {
         let (token, token_weight) = x.iter().enumerate().fold((0, f32::MIN), |(mi, me), (ei, &e)| if e > me { (ei, e) } else { (mi, me) });
 
         // print!("{}[{};{}]", tokenizer.id_to_token(token as u32).unwrap_or("<UNK>".to_string()), token, token_weight);
-        print!("{}", tokenizer.id_to_token(token as u32).unwrap_or("<UNK>".to_string()));
+        print!("{}", tokenizer.decode(vec![token as u32], false).unwrap_or("<UNK>".to_string()));
         std::io::stdout().flush().unwrap();
 
         x = rwkv.forward_raw(rwkv.emb.get(token).unwrap(), &mut state);
