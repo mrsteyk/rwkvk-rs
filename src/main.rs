@@ -342,7 +342,7 @@ impl Ln<'_> {
             None
         } else {
             // TODO: is converting to f32 worth it?
-            const NORM_EPS: f32 = 1e5;
+            const NORM_EPS: f32 = 1e-5;
 
             // What the fuck
             let lenf = other.len() as f32;
@@ -521,18 +521,20 @@ fn main() -> Result<()> {
             .context("failed to get embedding")?,
     );
     println!("embedding: {:?}", emb.shape());
-    // println!("embedding for 0 is: {:?}", emb.get(0));
 
+    // I decided to leave it here for the soft-emb
+    let ln0 = Ln {
+        weight: model.tensor("blocks.0.ln0.weight").unwrap(),
+        bias: model.tensor("blocks.0.ln0.bias").unwrap(),
+    };
     let optim_embed = Instant::now();
     let emb = {
-        let ln0 = Ln {
-            weight: model.tensor("blocks.0.ln0.weight").unwrap(),
-            bias: model.tensor("blocks.0.ln0.bias").unwrap(),
-        };
         EmbOptim::new(&emb, &ln0)
     };
     let optim_embed = optim_embed.elapsed();
     println!("embedding optim: {:?}", optim_embed);
+    // println!("embedding for 0 is: {:?}", emb.get(0).unwrap());
+    // println!("ln0 embedding for 0 is: {:?}", ln0.apply_f32(emb.get(0).unwrap()));
 
     let blocks_num = {
         let mut r = 0usize;
@@ -645,7 +647,7 @@ fn main() -> Result<()> {
     println!("RWKV load: {:?} ({:?})", load, load - optim_embed);
 
     let start = Instant::now();
-    let tokens = tokenizer.encode(args.text, false).unwrap().get_ids().to_vec();
+    let tokens = tokenizer.encode(args.text.clone(), false).unwrap().get_ids().to_vec();
     println!("Tokenization: {:?} {:?}", start.elapsed(), &tokens);
 
     let start = Instant::now();
@@ -664,10 +666,13 @@ fn main() -> Result<()> {
     let mut x = rwkv.forward_raw(rwkv.emb.get(tokens[tokens.len()-1] as usize).unwrap(), &mut state);
     println!("Preprocess: {:?}", start.elapsed());
     
+    print!("{}", &args.text);
+    std::io::stdout().flush().unwrap();
     for _ in 0..767 {
         let (token, token_weight) = x.iter().enumerate().fold((0, f32::MIN), |(mi, me), (ei, &e)| if e > me { (ei, e) } else { (mi, me) });
 
-        print!("{}[{};{}]", tokenizer.id_to_token(token as u32).unwrap_or("<UNK>".to_string()), token, token_weight);
+        // print!("{}[{};{}]", tokenizer.id_to_token(token as u32).unwrap_or("<UNK>".to_string()), token, token_weight);
+        print!("{}", tokenizer.id_to_token(token as u32).unwrap_or("<UNK>".to_string()));
         std::io::stdout().flush().unwrap();
 
         x = rwkv.forward_raw(rwkv.emb.get(token).unwrap(), &mut state);
