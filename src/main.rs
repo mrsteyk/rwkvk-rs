@@ -1,8 +1,9 @@
 use std::{
     fs::File,
+    io::Write,
     path::{Path, PathBuf},
     ptr::slice_from_raw_parts,
-    time::Instant, io::Write,
+    time::Instant,
 };
 
 use anyhow::{Context, Result};
@@ -528,9 +529,7 @@ fn main() -> Result<()> {
         bias: model.tensor("blocks.0.ln0.bias").unwrap(),
     };
     let optim_embed = Instant::now();
-    let emb = {
-        EmbOptim::new(&emb, &ln0)
-    };
+    let emb = { EmbOptim::new(&emb, &ln0) };
     let optim_embed = optim_embed.elapsed();
     println!("embedding optim: {:?}", optim_embed);
     // println!("embedding for 0 is: {:?}", emb.get(0).unwrap());
@@ -647,32 +646,50 @@ fn main() -> Result<()> {
     println!("RWKV load: {:?} ({:?})", load, load - optim_embed);
 
     let start = Instant::now();
-    let tokens = tokenizer.encode(args.text.clone(), false).unwrap().get_ids().to_vec();
+    let tokens = tokenizer
+        .encode(args.text.clone(), false)
+        .unwrap()
+        .get_ids()
+        .to_vec();
     println!("Tokenization: {:?} {:?}", start.elapsed(), &tokens);
 
     let start = Instant::now();
-    let mut state = vec![StateElem {
-        ffn_x: vec![0f32; rwkv.emb.shape[1]],
-        att_x: vec![0f32; rwkv.emb.shape[1]],
-        att_a: vec![0f32; rwkv.emb.shape[1]],
-        att_b: vec![0f32; rwkv.emb.shape[1]],
-        att_p: vec![-1e30; rwkv.emb.shape[1]],
-    }; rwkv.blocks.len()];
-    for &i in &tokens[..tokens.len()-1] {
-         let e = rwkv.emb.get(i as usize).unwrap();
-         rwkv.forward_raw_preproc(e, &mut state);
+    let mut state = vec![
+        StateElem {
+            ffn_x: vec![0f32; rwkv.emb.shape[1]],
+            att_x: vec![0f32; rwkv.emb.shape[1]],
+            att_a: vec![0f32; rwkv.emb.shape[1]],
+            att_b: vec![0f32; rwkv.emb.shape[1]],
+            att_p: vec![-1e30; rwkv.emb.shape[1]],
+        };
+        rwkv.blocks.len()
+    ];
+    for &i in &tokens[..tokens.len() - 1] {
+        let e = rwkv.emb.get(i as usize).unwrap();
+        rwkv.forward_raw_preproc(e, &mut state);
     }
 
-    let mut x = rwkv.forward_raw(rwkv.emb.get(tokens[tokens.len()-1] as usize).unwrap(), &mut state);
+    let mut x = rwkv.forward_raw(
+        rwkv.emb.get(tokens[tokens.len() - 1] as usize).unwrap(),
+        &mut state,
+    );
     println!("Preprocess: {:?}", start.elapsed());
-    
+
     print!("{}", &args.text);
     std::io::stdout().flush().unwrap();
     for _ in 0..767 {
-        let (token, token_weight) = x.iter().enumerate().fold((0, f32::MIN), |(mi, me), (ei, &e)| if e > me { (ei, e) } else { (mi, me) });
+        let (token, token_weight) = x.iter().enumerate().fold(
+            (0, f32::MIN),
+            |(mi, me), (ei, &e)| if e > me { (ei, e) } else { (mi, me) },
+        );
 
         // print!("{}[{};{}]", tokenizer.id_to_token(token as u32).unwrap_or("<UNK>".to_string()), token, token_weight);
-        print!("{}", tokenizer.decode(vec![token as u32], false).unwrap_or("<UNK>".to_string()));
+        print!(
+            "{}",
+            tokenizer
+                .decode(vec![token as u32], false)
+                .unwrap_or("<UNK>".to_string())
+        );
         std::io::stdout().flush().unwrap();
 
         x = rwkv.forward_raw(rwkv.emb.get(token).unwrap(), &mut state);
