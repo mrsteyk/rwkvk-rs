@@ -90,10 +90,10 @@ impl Att<'_> {
         debug_assert_eq!(self.receptance.shape()[1], xr.len());
         let rw = get_bf16(&self.receptance);
         let rw_len = self.receptance.shape()[0];
-        let r = (0..xr.len())
+        let r = (0..rw_len)
             .map(|x| {
-                (0..rw_len)
-                    .map(|y| rw[rw_len * x + y].to_f32() * xr[y])
+                (0..xr.len())
+                    .map(|y| rw[xr.len() * x + y].to_f32() * xr[y])
                     .sum::<f32>()
             })
             // .map(|x| bf16::from_f32(1f32 / (1f32 - x.to_f32().exp())))
@@ -104,10 +104,10 @@ impl Att<'_> {
         debug_assert_eq!(self.key.shape()[1], xk.len());
         let kw = get_bf16(&self.key);
         let kw_len = self.key.shape()[0];
-        let k = (0..xk.len())
+        let k = (0..kw_len)
             .map(|x| {
-                (0..kw_len)
-                    .map(|y| kw[kw_len * x + y].to_f32() * xk[y])
+                (0..xk.len())
+                    .map(|y| kw[xk.len() * x + y].to_f32() * xk[y])
                     .sum::<f32>()
             })
             .collect::<Vec<_>>();
@@ -116,10 +116,10 @@ impl Att<'_> {
         debug_assert_eq!(self.value.shape()[1], xv.len());
         let vw = get_bf16(&self.value);
         let vw_len = self.value.shape()[0];
-        let v = (0..xv.len())
+        let v = (0..vw_len)
             .map(|x| {
-                (0..vw_len)
-                    .map(|y| vw[vw_len * x + y].to_f32() * xv[y])
+                (0..xv.len())
+                    .map(|y| vw[xv.len() * x + y].to_f32() * xv[y])
                     .sum::<f32>()
             })
             .collect::<Vec<_>>();
@@ -265,10 +265,10 @@ impl Ffn<'_> {
         debug_assert_eq!(self.receptance.shape()[1], xr.len());
         let rw = get_bf16(&self.receptance);
         let rw_len = self.receptance.shape()[0];
-        let r = (0..xr.len())
+        let r = (0..rw_len)
             .map(|x| {
-                (0..rw_len)
-                    .map(|y| rw[rw_len * x + y].to_f32() * xr[y])
+                (0..xr.len())
+                    .map(|y| rw[xr.len() * x + y].to_f32() * xr[y])
                     .sum::<f32>()
             })
             .map(|x| (1f32 / (1f32 + (-x).exp())))
@@ -291,9 +291,9 @@ impl Ffn<'_> {
 
         let vw = get_bf16(&self.value);
         let vw_len = self.value.shape()[0];
-        let kv = (0..k.len()).map(|x| {
-            (0..vw_len)
-                .map(|y| vw[vw_len * x + y].to_f32() * k[y])
+        let kv = (0..vw_len).map(|x| {
+            (0..k.len())
+                .map(|y| vw[k.len() * x + y].to_f32() * k[y])
                 .sum::<f32>()
         });
 
@@ -435,7 +435,8 @@ impl EmbOptim {
         let emb = (0..emb.tokens())
             .map(|i| {
                 let emb = emb.get(i).unwrap().to_vec();
-                ln0.apply_bf16(&emb).unwrap()
+                // ln0.apply_bf16(&emb).unwrap()
+                emb.iter().map(|&x| x.to_f32()).collect()
             })
             .collect();
         Self {
@@ -471,8 +472,11 @@ impl RWKV<'_> {
         let mut x = x.to_vec();
         for i in 0..self.blocks.len() {
             x = self.blocks[i].apply(&x, &mut state[i]);
-            if (i % 6) == 0 {
-                x.iter_mut().for_each(|x| *x = *x / 2f32);
+            if ((i + 1) % 6) == 0 {
+                // x.iter_mut().for_each(|x| *x = *x / 2f32);
+                for i in 0..x.len() {
+                    x[i] /= 2f32;
+                }
             }
         }
         x
@@ -661,10 +665,10 @@ fn main() -> Result<()> {
     println!("Preprocess: {:?}", start.elapsed());
     
     for _ in 0..767 {
-        let token = x.iter().enumerate().fold((0, 0f32), |(mi, me), (ei, &e)| if e > me { (ei, e) } else { (mi, me) }).0;
+        let (token, token_weight) = x.iter().enumerate().fold((0, f32::MIN), |(mi, me), (ei, &e)| if e > me { (ei, e) } else { (mi, me) });
 
-        print!("{}", tokenizer.id_to_token(token as u32).unwrap_or("<UNK>".to_string()));
-        std::io::stdout().flush();
+        print!("{}[{};{}]", tokenizer.id_to_token(token as u32).unwrap_or("<UNK>".to_string()), token, token_weight);
+        std::io::stdout().flush().unwrap();
 
         x = rwkv.forward_raw(rwkv.emb.get(token).unwrap(), &mut state);
     }
