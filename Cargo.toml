@@ -8,7 +8,7 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0"
 clap = { version = "4.1.4", features = ["derive"] }
-half = { version = "2", features = ["zerocopy"] }
+half = { version = "2", features = ["std", "zerocopy"] }
 memmap2 = "0"
 safetensors = "0.2.8"
 tokenizers = { version = "0.13", default-features = false, features = ["esaxx_fast", "fancy-regex", "onig"] }

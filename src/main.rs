@@ -1,12 +1,13 @@
 use std::{
     fs::File,
     path::{Path, PathBuf},
-    ptr::slice_from_raw_parts, time::Instant,
+    ptr::slice_from_raw_parts,
+    time::Instant, io::Write,
 };
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use half::bf16;
+use half::prelude::*;
 use memmap2::Mmap;
 use safetensors::tensor::{SafeTensors, TensorView};
 use tokenizers::tokenizer::Tokenizer;
@@ -24,28 +25,22 @@ struct Args {
     text: String,
 }
 
-struct Head<'a> {
-    pub weight: TensorView<'a>,
+#[derive(Debug, Clone, PartialEq, PartialOrd)]
+struct StateElem {
+    // 0
+    pub ffn_x: Vec<f32>,
+    // 1
+    pub att_x: Vec<f32>,
+    // 2
+    pub att_a: Vec<f32>,
+    // 3
+    pub att_b: Vec<f32>,
+    // 4
+    pub att_p: Vec<f32>,
 }
 
-impl<'a> Head<'a> {
-    pub fn new(weight: TensorView<'a>) -> Self {
-        Self { weight }
-    }
-
-    pub fn shape(&self) -> &[usize] {
-        self.weight.shape()
-    }
-
-    pub fn get(&self, row: usize) -> Option<&[bf16]> {
-        if row > self.shape()[0] {
-            None
-        } else {
-            Some(get_row_2d_bf16(&self.weight, row))
-        }
-    }
-}
-
+// SA means Sparse Attention?
+#[derive(Debug)]
 struct Att<'a> {
     // Can be 16
     pub key: TensorView<'a>,
@@ -65,6 +60,166 @@ struct Att<'a> {
     pub value: TensorView<'a>,
 }
 
+impl Att<'_> {
+    pub fn apply(&self, x: &[f32], state: &mut StateElem) -> Vec<f32> {
+        // Most computations here are made&stored in f32 to save cycles.
+
+        let xx = &state.att_x;
+
+        let xop = |t| {
+            std::iter::zip(
+                x.iter()
+                    .zip(get_bf16(t).iter())
+                    .map(|(&x, &b)| x * b.to_f32()),
+                get_bf16(t)
+                    .iter()
+                    .zip(xx.iter())
+                    .map(|(&x, &xx)| xx * (1f32 - x.to_f32())),
+            )
+            .map(|(a, b)| a + b)
+            .collect::<Vec<_>>()
+        };
+
+        let xk = xop(&self.time_mix_k);
+        let xv = xop(&self.time_mix_v);
+        let xr = xop(&self.time_mix_r);
+        state.att_x = x.to_vec();
+
+        // mat by vec
+        #[cfg(debug_assertions)]
+        debug_assert_eq!(self.receptance.shape()[1], xr.len());
+        let rw = get_bf16(&self.receptance);
+        let rw_len = self.receptance.shape()[0];
+        let r = (0..xr.len())
+            .map(|x| {
+                (0..rw_len)
+                    .map(|y| rw[rw_len * x + y].to_f32() * xr[y])
+                    .sum::<f32>()
+            })
+            // .map(|x| bf16::from_f32(1f32 / (1f32 - x.to_f32().exp())))
+            .map(|x| (1f32 / (1f32 + (-x).exp())))
+            .collect::<Vec<_>>();
+
+        #[cfg(debug_assertions)]
+        debug_assert_eq!(self.key.shape()[1], xk.len());
+        let kw = get_bf16(&self.key);
+        let kw_len = self.key.shape()[0];
+        let k = (0..xk.len())
+            .map(|x| {
+                (0..kw_len)
+                    .map(|y| kw[kw_len * x + y].to_f32() * xk[y])
+                    .sum::<f32>()
+            })
+            .collect::<Vec<_>>();
+
+        #[cfg(debug_assertions)]
+        debug_assert_eq!(self.value.shape()[1], xv.len());
+        let vw = get_bf16(&self.value);
+        let vw_len = self.value.shape()[0];
+        let v = (0..xv.len())
+            .map(|x| {
+                (0..vw_len)
+                    .map(|y| vw[vw_len * x + y].to_f32() * xv[y])
+                    .sum::<f32>()
+            })
+            .collect::<Vec<_>>();
+
+        let aa = &state.att_a;
+        let bb = &state.att_b;
+        let pp = &state.att_p;
+        let ww = self
+            .time_first
+            .iter()
+            .zip(k.iter())
+            .map(|(&x, &y)| x + y)
+            .collect::<Vec<_>>();
+        let p = ww
+            .iter()
+            .zip(pp.iter())
+            .map(|(&ww, &pp)| ww.max(pp))
+            .collect::<Vec<_>>();
+        let e1 = p
+            .iter()
+            .zip(pp.iter())
+            .map(|(&p, &pp)| (pp - p).exp())
+            .collect::<Vec<_>>();
+        let e2 = p
+            .iter()
+            .zip(ww.iter())
+            .map(|(&p, &ww)| (ww - p).exp())
+            .collect::<Vec<_>>();
+
+        let a = std::iter::zip(
+            e1.iter().zip(aa.iter()).map(|(&e1, &aa)| e1 * aa),
+            e2.iter().zip(v.iter()).map(|(&e2, &v)| e2 * v),
+        )
+        .map(|(a, b)| a + b)
+        .collect::<Vec<_>>();
+        let b = e1
+            .iter()
+            .zip(bb.iter())
+            .map(|(&e1, &bb)| e1 * bb)
+            .zip(e2.iter())
+            .map(|(x, &e2)| x + e2)
+            .collect::<Vec<_>>();
+
+        let ww = self
+            .time_decay
+            .iter()
+            .zip(pp.iter())
+            .map(|(&time_decay, &pp)| pp + time_decay)
+            .collect::<Vec<_>>();
+        let p = ww
+            .iter()
+            .zip(k.iter())
+            .map(|(&ww, &k)| ww.max(k))
+            .collect::<Vec<_>>();
+        let e1 = p
+            .iter()
+            .zip(ww.iter())
+            .map(|(&p, &ww)| (ww - p).exp())
+            .collect::<Vec<_>>();
+        let e2 = p
+            .iter()
+            .zip(k.iter())
+            .map(|(&p, &k)| (k - p).exp())
+            .collect::<Vec<_>>();
+
+        // Almost there
+        state.att_a = e1
+            .iter()
+            .zip(e2.iter())
+            .zip(v.iter().zip(aa.iter()))
+            .map(|((e1, e2), (&v, &aa))| e1 * aa + e2 * v)
+            .collect();
+        state.att_b = e1
+            .iter()
+            .zip(e2.iter())
+            .zip(bb.iter())
+            .map(|((e1, e2), &bb)| e1 * bb + e2)
+            .collect();
+        state.att_p = p;
+
+        let wkv = a.iter().zip(b.iter()).map(|(&a, &b)| a / b);
+        let rwkv = r
+            .iter()
+            .zip(wkv)
+            .map(|(&r, wkv)| r * wkv)
+            .collect::<Vec<_>>();
+
+        let ow = get_bf16(&self.output);
+        let ow_len = self.output.shape()[0];
+        (0..rwkv.len())
+            .map(|x| {
+                (0..ow_len)
+                    .map(|y| ow[ow_len * x + y].to_f32() * rwkv[y])
+                    .sum::<f32>()
+            })
+            .collect::<Vec<_>>()
+    }
+}
+
+#[derive(Debug)]
 struct Ffn<'a> {
     // Can be 16
     pub key: TensorView<'a>,
@@ -76,47 +231,143 @@ struct Ffn<'a> {
     pub value: TensorView<'a>,
 }
 
+impl Ffn<'_> {
+    pub fn apply(&self, x: &[f32], state: &mut StateElem) -> Vec<f32> {
+        let xx = &state.ffn_x;
+        let xk = std::iter::zip(
+            x.iter()
+                .zip(get_bf16(&self.time_mix_k).iter())
+                .map(|(&x, &b)| x * b.to_f32()),
+            get_bf16(&self.time_mix_k)
+                .iter()
+                .map(|&x| 1f32 - x.to_f32())
+                .zip(xx.iter())
+                .map(|(x, &y)| x * y),
+        )
+        .map(|(a, b)| a + b)
+        .collect::<Vec<_>>();
+        let xr = std::iter::zip(
+            x.iter()
+                .zip(get_bf16(&self.time_mix_r).iter())
+                .map(|(&x, &b)| x * b.to_f32()),
+            get_bf16(&self.time_mix_r)
+                .iter()
+                .map(|&x| 1f32 - x.to_f32())
+                .zip(xx.iter())
+                .map(|(x, &y)| x * y),
+        )
+        .map(|(a, b)| a + b)
+        .collect::<Vec<_>>();
+        state.ffn_x = x.to_vec();
+
+        // mat by vec
+        #[cfg(debug_assertions)]
+        debug_assert_eq!(self.receptance.shape()[1], xr.len());
+        let rw = get_bf16(&self.receptance);
+        let rw_len = self.receptance.shape()[0];
+        let r = (0..xr.len())
+            .map(|x| {
+                (0..rw_len)
+                    .map(|y| rw[rw_len * x + y].to_f32() * xr[y])
+                    .sum::<f32>()
+            })
+            .map(|x| (1f32 / (1f32 + (-x).exp())))
+            .collect::<Vec<_>>();
+
+        #[cfg(debug_assertions)]
+        debug_assert_eq!(self.key.shape()[1], xk.len());
+        let kw = get_bf16(&self.key);
+        let kw_len = self.key.shape()[0];
+        // println!("{:?} {:?}", self.key.shape(), xk.len());
+        let k = (0..kw_len)
+            .map(|x| {
+                (0..xk.len())
+                    .map(|y| kw[xk.len() * x + y].to_f32() * xk[y])
+                    .sum::<f32>()
+            })
+            .map(|x| if x.is_sign_positive() { x } else { 0f32 })
+            .map(|x| x * x)
+            .collect::<Vec<_>>();
+
+        let vw = get_bf16(&self.value);
+        let vw_len = self.value.shape()[0];
+        let kv = (0..k.len()).map(|x| {
+            (0..vw_len)
+                .map(|y| vw[vw_len * x + y].to_f32() * k[y])
+                .sum::<f32>()
+        });
+
+        r.iter().zip(kv).map(|(&x, y)| x * y).collect()
+    }
+}
+
+#[derive(Debug)]
 struct Ln<'a> {
     pub weight: TensorView<'a>,
     pub bias: TensorView<'a>,
 }
 
 impl Ln<'_> {
-    pub fn apply_bf16(&self, other: &[bf16]) -> Option<Vec<bf16>> {
+    pub fn apply_bf16(&self, other: &[bf16]) -> Option<Vec<f32>> {
         if self.weight.shape()[0] != other.len() {
             None
         } else {
+            // TODO: is converting to f32 worth it?
+            const NORM_EPS: f32 = 1e5;
+
+            // What the fuck
+            let lenf = other.len() as f32;
+            let mean: f32 = other.iter().map(|&x| x.to_f32()).sum();
+            let mean = mean / lenf;
+            let other = other.iter().map(|&x| x.to_f32() - mean);
+            let sum2: f32 = other.clone().map(|x| x * x).sum();
+            let sum2 = sum2 / (lenf) + NORM_EPS;
+            let other = other.map(|x| (x / sum2.sqrt()));
+
             let w = get_bf16(&self.weight);
             let b = get_bf16(&self.bias);
 
             Some(
                 other
-                    .iter()
                     .zip(w.iter())
                     .zip(b.iter())
-                    .map(|((&x, &w), &b)| (x * w) + b)
+                    .map(|((x, &w), &b)| (x * w.to_f32()) + b.to_f32())
                     .collect(),
             )
         }
     }
-    pub fn apply_bf16_inplace(&self, other: &mut [bf16]) -> Option<()> {
+
+    pub fn apply_f32(&self, other: &[f32]) -> Option<Vec<f32>> {
         if self.weight.shape()[0] != other.len() {
             None
         } else {
+            // TODO: is converting to f32 worth it?
+            const NORM_EPS: f32 = 1e5;
+
+            // What the fuck
+            let lenf = other.len() as f32;
+            let mean: f32 = other.iter().map(|&x| x).sum();
+            let mean = mean / lenf;
+            let other = other.iter().map(|&x| x - mean);
+            let sum2: f32 = other.clone().map(|x| x * x).sum();
+            let sum2 = sum2 / (lenf) + NORM_EPS;
+            let other = other.map(|x| (x / sum2.sqrt()));
+
             let w = get_bf16(&self.weight);
             let b = get_bf16(&self.bias);
 
-            // for loop is more idiomatic and I need indexes?
-            // But does it vectorise... not like bf16 outside of avx512 is useful...
-            for i in 0..other.len() {
-                other[i] = (other[i] * w[i]) + b[i];
-            }
-
-            Some(())
+            Some(
+                other
+                    .zip(w.iter())
+                    .zip(b.iter())
+                    .map(|((x, &w), &b)| (x * w.to_f32()) + b.to_f32())
+                    .collect(),
+            )
         }
     }
 }
 
+#[derive(Debug)]
 struct Block<'a> {
     pub att: Att<'a>,
     pub ffn: Ffn<'a>,
@@ -125,6 +376,23 @@ struct Block<'a> {
     pub ln2: Ln<'a>,
 }
 
+impl Block<'_> {
+    pub fn apply(&self, x: &[f32], state: &mut StateElem) -> Vec<f32> {
+        let xx = self.ln1.apply_f32(x).unwrap();
+        let xx = self.att.apply(&xx, state);
+        let x = x
+            .iter()
+            .zip(xx.iter())
+            .map(|(&x, &y)| x + y)
+            .collect::<Vec<_>>();
+
+        let xx = self.ln2.apply_f32(&x).unwrap();
+        let xx = self.ffn.apply(&xx, state);
+        x.iter().zip(xx.iter()).map(|(&x, &y)| x + y).collect()
+    }
+}
+
+#[derive(Debug)]
 struct Emb<'a> {
     pub tensor: TensorView<'a>,
 }
@@ -155,8 +423,9 @@ impl<'a> Emb<'a> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, PartialOrd)]
 struct EmbOptim {
-    pub emb: Vec<Vec<bf16>>,
+    pub emb: Vec<Vec<f32>>,
     pub shape: [usize; 2],
 }
 
@@ -165,9 +434,8 @@ impl EmbOptim {
         let shape = emb.shape();
         let emb = (0..emb.tokens())
             .map(|i| {
-                let mut emb = emb.get(i).unwrap().to_vec();
-                ln0.apply_bf16_inplace(&mut emb).unwrap();
-                emb
+                let emb = emb.get(i).unwrap().to_vec();
+                ln0.apply_bf16(&emb).unwrap()
             })
             .collect();
         Self {
@@ -180,7 +448,7 @@ impl EmbOptim {
         &self.shape
     }
 
-    pub fn get(&self, row: usize) -> Option<&[bf16]> {
+    pub fn get(&self, row: usize) -> Option<&[f32]> {
         if row > self.emb.len() {
             None
         } else {
@@ -194,8 +462,36 @@ struct RWKV<'a> {
     // pub emb: Emb<'a>,
     pub emb: EmbOptim,
     pub blocks: Vec<Block<'a>>,
-    pub head: Head<'a>,
     pub ln_out: Ln<'a>,
+    pub head: TensorView<'a>,
+}
+
+impl RWKV<'_> {
+    pub fn forward_raw_preproc(&self, x: &[f32], state: &mut [StateElem]) -> Vec<f32> {
+        let mut x = x.to_vec();
+        for i in 0..self.blocks.len() {
+            x = self.blocks[i].apply(&x, &mut state[i]);
+            if (i % 6) == 0 {
+                x.iter_mut().for_each(|x| *x = *x / 2f32);
+            }
+        }
+        x
+    }
+
+    pub fn forward_raw(&self, x: &[f32], state: &mut [StateElem]) -> Vec<f32> {
+        let xx = self.forward_raw_preproc(x, state);
+
+        let xx = self.ln_out.apply_f32(&xx).unwrap();
+        let h = get_bf16(&self.head);
+        let h_len = self.head.shape()[0];
+        (0..h_len)
+            .map(|x| {
+                (0..xx.len())
+                    .map(|y| h[xx.len() * x + y].to_f32() * xx[y])
+                    .sum::<f32>()
+            })
+            .collect()
+    }
 }
 
 fn main() -> Result<()> {
@@ -329,9 +625,7 @@ fn main() -> Result<()> {
         })
         .collect::<Vec<_>>();
 
-    let head = Head {
-        weight: model.tensor("head.weight").unwrap(),
-    };
+    let head = model.tensor("head.weight").unwrap();
     let ln_out = Ln {
         weight: model.tensor("ln_out.weight").unwrap(),
         bias: model.tensor("ln_out.bias").unwrap(),
@@ -346,6 +640,36 @@ fn main() -> Result<()> {
     let load = start.elapsed();
     println!("RWKV load: {:?} ({:?})", load, load - optim_embed);
 
+    let start = Instant::now();
+    let tokens = tokenizer.encode(args.text, false).unwrap().get_ids().to_vec();
+    println!("Tokenization: {:?} {:?}", start.elapsed(), &tokens);
+
+    let start = Instant::now();
+    let mut state = vec![StateElem {
+        ffn_x: vec![0f32; rwkv.emb.shape[1]],
+        att_x: vec![0f32; rwkv.emb.shape[1]],
+        att_a: vec![0f32; rwkv.emb.shape[1]],
+        att_b: vec![0f32; rwkv.emb.shape[1]],
+        att_p: vec![-1e30; rwkv.emb.shape[1]],
+    }; rwkv.blocks.len()];
+    for &i in &tokens[..tokens.len()-1] {
+         let e = rwkv.emb.get(i as usize).unwrap();
+         rwkv.forward_raw_preproc(e, &mut state);
+    }
+
+    let mut x = rwkv.forward_raw(rwkv.emb.get(tokens[tokens.len()-1] as usize).unwrap(), &mut state);
+    println!("Preprocess: {:?}", start.elapsed());
+    
+    for _ in 0..767 {
+        let token = x.iter().enumerate().fold((0, 0f32), |(mi, me), (ei, &e)| if e > me { (ei, e) } else { (mi, me) }).0;
+
+        print!("{}", tokenizer.id_to_token(token as u32).unwrap_or("<UNK>".to_string()));
+        std::io::stdout().flush();
+
+        x = rwkv.forward_raw(rwkv.emb.get(token).unwrap(), &mut state);
+    }
+
+    println!("");
     Ok(())
 }
 
