@@ -1,7 +1,7 @@
 use std::{
     fs::File,
     path::{Path, PathBuf},
-    ptr::slice_from_raw_parts,
+    ptr::slice_from_raw_parts, time::Instant,
 };
 
 use anyhow::{Context, Result};
@@ -50,7 +50,7 @@ struct Att<'a> {
     // Can be 16
     pub key: TensorView<'a>,
     pub output: TensorView<'a>,
-    pub receptence: TensorView<'a>,
+    pub receptance: TensorView<'a>,
     // ---
     // Can't be 16
     // pub time_decay: TensorView<'a>,
@@ -68,7 +68,7 @@ struct Att<'a> {
 struct Ffn<'a> {
     // Can be 16
     pub key: TensorView<'a>,
-    pub receptence: TensorView<'a>,
+    pub receptance: TensorView<'a>,
     // ---
     pub time_mix_k: TensorView<'a>,
     pub time_mix_r: TensorView<'a>,
@@ -81,10 +81,46 @@ struct Ln<'a> {
     pub bias: TensorView<'a>,
 }
 
+impl Ln<'_> {
+    pub fn apply_bf16(&self, other: &[bf16]) -> Option<Vec<bf16>> {
+        if self.weight.shape()[0] != other.len() {
+            None
+        } else {
+            let w = get_bf16(&self.weight);
+            let b = get_bf16(&self.bias);
+
+            Some(
+                other
+                    .iter()
+                    .zip(w.iter())
+                    .zip(b.iter())
+                    .map(|((&x, &w), &b)| (x * w) + b)
+                    .collect(),
+            )
+        }
+    }
+    pub fn apply_bf16_inplace(&self, other: &mut [bf16]) -> Option<()> {
+        if self.weight.shape()[0] != other.len() {
+            None
+        } else {
+            let w = get_bf16(&self.weight);
+            let b = get_bf16(&self.bias);
+
+            // for loop is more idiomatic and I need indexes?
+            // But does it vectorise... not like bf16 outside of avx512 is useful...
+            for i in 0..other.len() {
+                other[i] = (other[i] * w[i]) + b[i];
+            }
+
+            Some(())
+        }
+    }
+}
+
 struct Block<'a> {
     pub att: Att<'a>,
     pub ffn: Ffn<'a>,
-    pub ln0: Option<Ln<'a>>,
+    // pub ln0: Option<Ln<'a>>,
     pub ln1: Ln<'a>,
     pub ln2: Ln<'a>,
 }
@@ -119,9 +155,44 @@ impl<'a> Emb<'a> {
     }
 }
 
+struct EmbOptim {
+    pub emb: Vec<Vec<bf16>>,
+    pub shape: [usize; 2],
+}
+
+impl EmbOptim {
+    pub fn new(emb: &Emb, ln0: &Ln) -> Self {
+        let shape = emb.shape();
+        let emb = (0..emb.tokens())
+            .map(|i| {
+                let mut emb = emb.get(i).unwrap().to_vec();
+                ln0.apply_bf16_inplace(&mut emb).unwrap();
+                emb
+            })
+            .collect();
+        Self {
+            emb,
+            shape: [shape[0], shape[1]],
+        }
+    }
+
+    pub fn shape(&self) -> &[usize] {
+        &self.shape
+    }
+
+    pub fn get(&self, row: usize) -> Option<&[bf16]> {
+        if row > self.emb.len() {
+            None
+        } else {
+            Some(&self.emb[row])
+        }
+    }
+}
+
 // struct RWKV<'a, const T: usize> {
 struct RWKV<'a> {
-    pub emb: Emb<'a>,
+    // pub emb: Emb<'a>,
+    pub emb: EmbOptim,
     pub blocks: Vec<Block<'a>>,
     pub head: Head<'a>,
     pub ln_out: Ln<'a>,
@@ -130,21 +201,38 @@ struct RWKV<'a> {
 fn main() -> Result<()> {
     let args = Args::parse();
 
+    let start = Instant::now();
     let tokenizer = Tokenizer::from_file(args.tokenizer).unwrap();
     // println!("{:?}", tokenizer.encode("<|endoftext|>", true));
+    println!("Tokenizer load: {:?}", start.elapsed());
 
+    let start = Instant::now();
     let model_file = File::open(args.model).context("error openning model file!")?;
     let map = unsafe { Mmap::map(&model_file).context("error mmaping model")? };
     let model = SafeTensors::deserialize(&map[..]).context("error parsing safetensor file")?;
+    println!("SafeTensors parse: {:?}", start.elapsed());
 
     // println!("{:#?}", model.names());
 
+    let start = Instant::now();
     let emb = Emb::new(
         model
             .tensor("emb.weight")
             .context("failed to get embedding")?,
     );
     println!("embedding: {:?}", emb.shape());
+    // println!("embedding for 0 is: {:?}", emb.get(0));
+
+    let optim_embed = Instant::now();
+    let emb = {
+        let ln0 = Ln {
+            weight: model.tensor("blocks.0.ln0.weight").unwrap(),
+            bias: model.tensor("blocks.0.ln0.bias").unwrap(),
+        };
+        EmbOptim::new(&emb, &ln0)
+    };
+    let optim_embed = optim_embed.elapsed();
+    println!("embedding optim: {:?}", optim_embed);
 
     let blocks_num = {
         let mut r = 0usize;
@@ -160,12 +248,9 @@ fn main() -> Result<()> {
     };
     println!("blocks_num: {}", blocks_num);
 
-    // let emb0 = get_row_2d_bf16(emb, 0);
-    // println!("emb0: {:?}", emb0);
-
     let blocks = (0..blocks_num)
         .map(|i| {
-            // let base = format!("blocks.{}.", i);
+            // println!("Block {}", i);
             let time_decay = model
                 .tensor(&format!("blocks.{}.att.time_decay", i))
                 .unwrap();
@@ -192,8 +277,8 @@ fn main() -> Result<()> {
                 output: model
                     .tensor(&format!("blocks.{}.att.output.weight", i))
                     .unwrap(),
-                receptence: model
-                    .tensor(&format!("blocks.{}.att.receptence.weight", i))
+                receptance: model
+                    .tensor(&format!("blocks.{}.att.receptance.weight", i))
                     .unwrap(),
                 // ---
                 time_decay,
@@ -217,28 +302,20 @@ fn main() -> Result<()> {
                 key: model
                     .tensor(&format!("blocks.{}.ffn.key.weight", i))
                     .unwrap(),
-                receptence: model
-                    .tensor(&format!("blocks.{}.ffn.receptence.weight", i))
+                receptance: model
+                    .tensor(&format!("blocks.{}.ffn.receptance.weight", i))
                     .unwrap(),
                 time_mix_k: model
                     .tensor(&format!("blocks.{}.ffn.time_mix_k", i))
                     .unwrap(),
                 time_mix_r: model
-                    .tensor(&format!("blocks.{}.ffn.time_mix_k", i))
+                    .tensor(&format!("blocks.{}.ffn.time_mix_r", i))
                     .unwrap(),
                 value: model
                     .tensor(&format!("blocks.{}.ffn.value.weight", i))
                     .unwrap(),
             };
 
-            let ln0 = if let Ok(ln0_weight) = model.tensor(&format!("blocks.{}.ln0.weight", i)) {
-                Some(Ln {
-                    weight: ln0_weight,
-                    bias: model.tensor(&format!("blocks.{}.ln0.bias", i)).unwrap(),
-                })
-            } else {
-                None
-            };
             let ln1 = Ln {
                 weight: model.tensor(&format!("blocks.{}.ln1.weight", i)).unwrap(),
                 bias: model.tensor(&format!("blocks.{}.ln1.bias", i)).unwrap(),
@@ -248,22 +325,42 @@ fn main() -> Result<()> {
                 bias: model.tensor(&format!("blocks.{}.ln2.bias", i)).unwrap(),
             };
 
-            Block {
-                att,
-                ffn,
-                ln0,
-                ln1,
-                ln2
-            }
+            Block { att, ffn, ln1, ln2 }
         })
         .collect::<Vec<_>>();
+
+    let head = Head {
+        weight: model.tensor("head.weight").unwrap(),
+    };
+    let ln_out = Ln {
+        weight: model.tensor("ln_out.weight").unwrap(),
+        bias: model.tensor("ln_out.bias").unwrap(),
+    };
+
+    let rwkv = RWKV {
+        emb,
+        blocks,
+        head,
+        ln_out,
+    };
+    let load = start.elapsed();
+    println!("RWKV load: {:?} ({:?})", load, load - optim_embed);
 
     Ok(())
 }
 
-fn get_row_2d_bf16<'a>(emb: &safetensors::tensor::TensorView<'a>, row: usize) -> &'a [bf16] {
+fn get_row_2d_bf16<'a>(emb: &TensorView<'a>, row: usize) -> &'a [bf16] {
     let len = emb.shape()[1];
     let row_size = len * 2;
     let idx = row_size * row;
     unsafe { &*slice_from_raw_parts(emb.data()[idx..idx + row_size].as_ptr().cast::<bf16>(), len) }
+}
+
+fn get_bf16<'a>(tensor: &TensorView<'a>) -> &'a [bf16] {
+    unsafe {
+        &*slice_from_raw_parts(
+            tensor.data().as_ptr().cast::<bf16>(),
+            tensor.shape().iter().fold(1, |a, &x| a * x),
+        )
+    }
 }
