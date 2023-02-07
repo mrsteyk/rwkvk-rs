@@ -1,5 +1,5 @@
-use super::get_row_2d_bf16;
 use super::get_bf16;
+use super::get_row_2d_bf16;
 
 use std;
 

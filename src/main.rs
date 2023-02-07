@@ -1,10 +1,4 @@
-use std::{
-    fs::File,
-    io::Write,
-    path::PathBuf,
-    ptr::slice_from_raw_parts,
-    time::Instant,
-};
+use std::{fs::File, io::Write, path::PathBuf, time::Instant};
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -90,29 +84,13 @@ fn main() -> Result<()> {
     let blocks = (0..blocks_num)
         .map(|i| {
             // println!("Block {}", i);
-            let time_decay = model
-                .tensor(&format!("blocks.{i}.att.time_decay"))
-                .unwrap();
-            let time_first = model
-                .tensor(&format!("blocks.{i}.att.time_first"))
-                .unwrap();
-            let time_decay = unsafe {
-                &*slice_from_raw_parts(
-                    time_decay.data().as_ptr().cast::<f32>(),
-                    time_decay.shape()[0],
-                )
-            };
-            let time_first = unsafe {
-                &*slice_from_raw_parts(
-                    time_first.data().as_ptr().cast::<f32>(),
-                    time_first.shape()[0],
-                )
-            };
+            let time_decay = model.tensor(&format!("blocks.{i}.att.time_decay")).unwrap();
+            let time_first = model.tensor(&format!("blocks.{i}.att.time_first")).unwrap();
+            let time_decay = bytemuck::cast_slice::<_, f32>(time_decay.data());
+            let time_first = bytemuck::cast_slice::<_, f32>(time_first.data());
 
             let att = rwkv::Att {
-                key: model
-                    .tensor(&format!("blocks.{i}.att.key.weight"))
-                    .unwrap(),
+                key: model.tensor(&format!("blocks.{i}.att.key.weight")).unwrap(),
                 output: model
                     .tensor(&format!("blocks.{i}.att.output.weight"))
                     .unwrap(),
@@ -123,33 +101,21 @@ fn main() -> Result<()> {
                 time_decay,
                 time_first,
                 // ---
-                time_mix_k: model
-                    .tensor(&format!("blocks.{i}.att.time_mix_k"))
-                    .unwrap(),
-                time_mix_r: model
-                    .tensor(&format!("blocks.{i}.att.time_mix_r"))
-                    .unwrap(),
-                time_mix_v: model
-                    .tensor(&format!("blocks.{i}.att.time_mix_v"))
-                    .unwrap(),
+                time_mix_k: model.tensor(&format!("blocks.{i}.att.time_mix_k")).unwrap(),
+                time_mix_r: model.tensor(&format!("blocks.{i}.att.time_mix_r")).unwrap(),
+                time_mix_v: model.tensor(&format!("blocks.{i}.att.time_mix_v")).unwrap(),
                 value: model
                     .tensor(&format!("blocks.{i}.att.value.weight"))
                     .unwrap(),
             };
 
             let ffn = rwkv::Ffn {
-                key: model
-                    .tensor(&format!("blocks.{i}.ffn.key.weight"))
-                    .unwrap(),
+                key: model.tensor(&format!("blocks.{i}.ffn.key.weight")).unwrap(),
                 receptance: model
                     .tensor(&format!("blocks.{i}.ffn.receptance.weight"))
                     .unwrap(),
-                time_mix_k: model
-                    .tensor(&format!("blocks.{i}.ffn.time_mix_k"))
-                    .unwrap(),
-                time_mix_r: model
-                    .tensor(&format!("blocks.{i}.ffn.time_mix_r"))
-                    .unwrap(),
+                time_mix_k: model.tensor(&format!("blocks.{i}.ffn.time_mix_k")).unwrap(),
+                time_mix_r: model.tensor(&format!("blocks.{i}.ffn.time_mix_r")).unwrap(),
                 value: model
                     .tensor(&format!("blocks.{i}.ffn.value.weight"))
                     .unwrap(),
@@ -259,22 +225,22 @@ fn main() -> Result<()> {
             safetensors::tensor::Dtype::BF16 => get_bf16(soft)
                 .chunks_exact(soft.shape()[1])
                 .map(|x| {
-                    rwkv::Ln::apply_f32_f(&x.iter().map(|&x| x.to_f32()).collect::<Vec<_>>(), &w, &b)
-                        .unwrap()
+                    rwkv::Ln::apply_f32_f(
+                        &x.iter().map(|&x| x.to_f32()).collect::<Vec<_>>(),
+                        &w,
+                        &b,
+                    )
+                    .unwrap()
                 })
                 .for_each(|x| {
                     rwkv.forward_raw_preproc(&x, &mut state);
                 }),
-            safetensors::tensor::Dtype::F32 => unsafe {
-                &*slice_from_raw_parts(
-                    soft.data().as_ptr().cast::<f32>(),
-                    soft.shape().iter().product(),
-                )
-            }
-            .chunks_exact(soft.shape()[1])
-            .for_each(|x| {
-                rwkv.forward_raw_preproc(x, &mut state);
-            }),
+            // Small performance penalty?
+            safetensors::tensor::Dtype::F32 => bytemuck::cast_slice::<_, f32>(&soft.data().to_vec())
+                .chunks_exact(soft.shape()[1])
+                .for_each(|x| {
+                    rwkv.forward_raw_preproc(x, &mut state);
+                }),
             _ => unreachable!(),
         }
     }
@@ -348,14 +314,9 @@ fn get_row_2d_bf16<'a>(emb: &TensorView<'a>, row: usize) -> &'a [bf16] {
     let len = emb.shape()[1];
     let row_size = len * 2;
     let idx = row_size * row;
-    unsafe { &*slice_from_raw_parts(emb.data()[idx..idx + row_size].as_ptr().cast::<bf16>(), len) }
+    bytemuck::cast_slice(&emb.data()[idx..idx + row_size])
 }
 
 fn get_bf16<'a>(tensor: &TensorView<'a>) -> &'a [bf16] {
-    unsafe {
-        &*slice_from_raw_parts(
-            tensor.data().as_ptr().cast::<bf16>(),
-            tensor.shape().iter().product(),
-        )
-    }
+    bytemuck::cast_slice(tensor.data())
 }
