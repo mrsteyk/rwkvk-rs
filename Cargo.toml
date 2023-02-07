@@ -13,7 +13,7 @@ lto = "thin"
 anyhow = "1.0"
 bytemuck = "1"
 clap = { version = "4.1.4", features = ["derive"] }
-half = { version = "2", features = ["std", "bytemuck"] }
+half = { version = "2", features = ["bytemuck", "use-intrinsics"] }
 memmap2 = "0"
 safetensors = "0.2.8"
 tokenizers = { version = "0.13", default-features = false, features = ["esaxx_fast", "fancy-regex", "onig"] }

@@ -1,0 +1,2 @@
+[target.'cfg(any(windows, unix))']
+rustflags = ["-C", "target-cpu=native", "-C", "llvm-args=-ffast-math", "-C", "opt-level=3", "-C", "llvm-args=-force-vector-width=16"]
