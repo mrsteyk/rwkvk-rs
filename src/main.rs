@@ -1,7 +1,7 @@
 use std::{
     fs::File,
     io::Write,
-    path::{Path, PathBuf},
+    path::PathBuf,
     ptr::slice_from_raw_parts,
     time::Instant,
 };
@@ -334,7 +334,7 @@ impl Ln<'_> {
             // What the fuck
             // Collecting is a bit faster???
             let lenf = other.len() as f32;
-            let mean: f32 = other.iter().map(|&x| x).sum();
+            let mean: f32 = other.iter().sum();
             let mean = mean / lenf;
             let other = other.iter().map(|&x| x - mean).collect::<Vec<_>>();
             let sum2: f32 = other.iter().map(|x| x * x).sum();
@@ -366,7 +366,7 @@ impl Ln<'_> {
             // What the fuck
             // Collecting is a bit faster???
             let lenf = other.len() as f32;
-            let mean: f32 = other.iter().map(|&x| x).sum();
+            let mean: f32 = other.iter().sum();
             let mean = mean / lenf;
             let other = other.iter().map(|&x| x - mean).collect::<Vec<_>>();
             let sum2: f32 = other.iter().map(|x| x * x).sum();
@@ -449,18 +449,10 @@ struct EmbOptim {
     pub shape: [usize; 2],
 }
 
-#[allow(unused_variables)]
 impl EmbOptim {
+    #[allow(unused_variables)]
     pub fn new(emb: &Emb, ln0: &Ln) -> Self {
         let shape = emb.shape();
-        // let emb = (0..emb.tokens())
-        //     .map(|i| {
-        //         let emb = emb.get(i).unwrap().to_vec();
-        //         // ln0.apply_bf16(&emb).unwrap()
-        //         emb.iter().map(|&x| x.to_f32()).collect()
-        //     })
-        //     .collect();
-        // This is kind of faster?
         let emb = get_bf16(&emb.tensor)
             .chunks_exact(emb.nembed())
             .map(|x| x.iter().map(|&x| x.to_f32()).collect::<Vec<_>>())
@@ -469,10 +461,6 @@ impl EmbOptim {
             emb,
             shape: [shape[0], shape[1]],
         }
-    }
-
-    pub fn shape(&self) -> &[usize] {
-        &self.shape
     }
 
     pub fn get(&self, row: usize) -> Option<&[f32]> {
@@ -484,8 +472,7 @@ impl EmbOptim {
     }
 }
 
-// struct RWKV<'a, const T: usize> {
-struct RWKV<'a> {
+struct Rwkv<'a> {
     // pub emb: Emb<'a>,
     pub emb: EmbOptim,
     pub blocks: Vec<Block<'a>>,
@@ -493,15 +480,15 @@ struct RWKV<'a> {
     pub head: TensorView<'a>,
 }
 
-impl RWKV<'_> {
+impl Rwkv<'_> {
     pub fn forward_raw_preproc(&self, x: &[f32], state: &mut [StateElem]) -> Vec<f32> {
         let mut x = x.to_vec();
-        for i in 0..self.blocks.len() {
-            x = self.blocks[i].apply(&x, &mut state[i]);
+        for (i, state) in state.iter_mut().enumerate().take(self.blocks.len()) {
+            x = self.blocks[i].apply(&x, state);
             if ((i + 1) % 6) == 0 {
                 // x.iter_mut().for_each(|x| *x = *x / 2f32);
-                for i in 0..x.len() {
-                    x[i] /= 2f32;
+                for e in &mut x {
+                    *e /= 2f32;
                 }
             }
         }
@@ -513,14 +500,6 @@ impl RWKV<'_> {
 
         let xx = self.ln_out.apply_f32(&xx).unwrap();
         let h = get_bf16(&self.head);
-        // let h_len = self.head.shape()[0];
-        // (0..h_len)
-        //     .map(|x| {
-        //         (0..xx.len())
-        //             .map(|y| h[xx.len() * x + y].to_f32() * xx[y])
-        //             .sum::<f32>()
-        //     })
-        //     .collect()
         h.chunks_exact(xx.len())
             .map(|x| {
                 x.iter()
@@ -564,7 +543,7 @@ fn main() -> Result<()> {
     let optim_embed = Instant::now();
     let emb = { EmbOptim::new(&emb, &ln0) };
     let optim_embed = optim_embed.elapsed();
-    println!("embedding optim: {:?}", optim_embed);
+    println!("embedding optim: {optim_embed:?}");
     // println!("embedding for 0 is: {:?}", emb.get(0).unwrap());
     // println!("ln0 embedding for 0 is: {:?}", ln0.apply_f32(emb.get(0).unwrap()));
 
@@ -572,24 +551,24 @@ fn main() -> Result<()> {
         let mut r = 0usize;
         for i in model.names() {
             const PREFIX: &str = "blocks.";
-            if i.starts_with(PREFIX) {
-                let i = &i[PREFIX.len()..];
+            if let Some(i) = i.strip_prefix(PREFIX) {
+                // let i = &i[PREFIX.len()..];
                 let i = &i[..i.find('.').unwrap_or(0)];
-                r = r.max(usize::from_str_radix(i, 10).context("error parsing blocks")?)
+                r = r.max(i.parse::<usize>().context("error parsing blocks")?)
             }
         }
         r + 1
     };
-    println!("blocks_num: {}", blocks_num);
+    println!("blocks_num: {blocks_num}");
 
     let blocks = (0..blocks_num)
         .map(|i| {
             // println!("Block {}", i);
             let time_decay = model
-                .tensor(&format!("blocks.{}.att.time_decay", i))
+                .tensor(&format!("blocks.{i}.att.time_decay"))
                 .unwrap();
             let time_first = model
-                .tensor(&format!("blocks.{}.att.time_first", i))
+                .tensor(&format!("blocks.{i}.att.time_first"))
                 .unwrap();
             let time_decay = unsafe {
                 &*slice_from_raw_parts(
@@ -606,57 +585,57 @@ fn main() -> Result<()> {
 
             let att = Att {
                 key: model
-                    .tensor(&format!("blocks.{}.att.key.weight", i))
+                    .tensor(&format!("blocks.{i}.att.key.weight"))
                     .unwrap(),
                 output: model
-                    .tensor(&format!("blocks.{}.att.output.weight", i))
+                    .tensor(&format!("blocks.{i}.att.output.weight"))
                     .unwrap(),
                 receptance: model
-                    .tensor(&format!("blocks.{}.att.receptance.weight", i))
+                    .tensor(&format!("blocks.{i}.att.receptance.weight"))
                     .unwrap(),
                 // ---
                 time_decay,
                 time_first,
                 // ---
                 time_mix_k: model
-                    .tensor(&format!("blocks.{}.att.time_mix_k", i))
+                    .tensor(&format!("blocks.{i}.att.time_mix_k"))
                     .unwrap(),
                 time_mix_r: model
-                    .tensor(&format!("blocks.{}.att.time_mix_r", i))
+                    .tensor(&format!("blocks.{i}.att.time_mix_r"))
                     .unwrap(),
                 time_mix_v: model
-                    .tensor(&format!("blocks.{}.att.time_mix_v", i))
+                    .tensor(&format!("blocks.{i}.att.time_mix_v"))
                     .unwrap(),
                 value: model
-                    .tensor(&format!("blocks.{}.att.value.weight", i))
+                    .tensor(&format!("blocks.{i}.att.value.weight"))
                     .unwrap(),
             };
 
             let ffn = Ffn {
                 key: model
-                    .tensor(&format!("blocks.{}.ffn.key.weight", i))
+                    .tensor(&format!("blocks.{i}.ffn.key.weight"))
                     .unwrap(),
                 receptance: model
-                    .tensor(&format!("blocks.{}.ffn.receptance.weight", i))
+                    .tensor(&format!("blocks.{i}.ffn.receptance.weight"))
                     .unwrap(),
                 time_mix_k: model
-                    .tensor(&format!("blocks.{}.ffn.time_mix_k", i))
+                    .tensor(&format!("blocks.{i}.ffn.time_mix_k"))
                     .unwrap(),
                 time_mix_r: model
-                    .tensor(&format!("blocks.{}.ffn.time_mix_r", i))
+                    .tensor(&format!("blocks.{i}.ffn.time_mix_r"))
                     .unwrap(),
                 value: model
-                    .tensor(&format!("blocks.{}.ffn.value.weight", i))
+                    .tensor(&format!("blocks.{i}.ffn.value.weight"))
                     .unwrap(),
             };
 
             let ln1 = Ln {
-                weight: model.tensor(&format!("blocks.{}.ln1.weight", i)).unwrap(),
-                bias: model.tensor(&format!("blocks.{}.ln1.bias", i)).unwrap(),
+                weight: model.tensor(&format!("blocks.{i}.ln1.weight")).unwrap(),
+                bias: model.tensor(&format!("blocks.{i}.ln1.bias")).unwrap(),
             };
             let ln2 = Ln {
-                weight: model.tensor(&format!("blocks.{}.ln2.weight", i)).unwrap(),
-                bias: model.tensor(&format!("blocks.{}.ln2.bias", i)).unwrap(),
+                weight: model.tensor(&format!("blocks.{i}.ln2.weight")).unwrap(),
+                bias: model.tensor(&format!("blocks.{i}.ln2.bias")).unwrap(),
             };
 
             Block { att, ffn, ln1, ln2 }
@@ -669,7 +648,7 @@ fn main() -> Result<()> {
         bias: model.tensor("ln_out.bias").unwrap(),
     };
 
-    let rwkv = RWKV {
+    let rwkv = Rwkv {
         emb,
         blocks,
         head,
@@ -751,7 +730,7 @@ fn main() -> Result<()> {
             .map(|&x| x.to_f32())
             .collect::<Vec<_>>();
         match soft.dtype() {
-            safetensors::tensor::Dtype::BF16 => get_bf16(&soft)
+            safetensors::tensor::Dtype::BF16 => get_bf16(soft)
                 .chunks_exact(soft.shape()[1])
                 .map(|x| {
                     Ln::apply_f32_f(&x.iter().map(|&x| x.to_f32()).collect::<Vec<_>>(), &w, &b)
@@ -763,12 +742,12 @@ fn main() -> Result<()> {
             safetensors::tensor::Dtype::F32 => unsafe {
                 &*slice_from_raw_parts(
                     soft.data().as_ptr().cast::<f32>(),
-                    soft.shape().iter().fold(1, |x, &y| x * y),
+                    soft.shape().iter().product(),
                 )
             }
             .chunks_exact(soft.shape()[1])
             .for_each(|x| {
-                rwkv.forward_raw_preproc(&x, &mut state);
+                rwkv.forward_raw_preproc(x, &mut state);
             }),
             _ => unreachable!(),
         }
@@ -835,7 +814,7 @@ fn main() -> Result<()> {
         x = rwkv.forward_raw(rwkv.emb.get(token).unwrap(), &mut state);
     }
 
-    println!("");
+    println!();
     Ok(())
 }
 
@@ -850,7 +829,7 @@ fn get_bf16<'a>(tensor: &TensorView<'a>) -> &'a [bf16] {
     unsafe {
         &*slice_from_raw_parts(
             tensor.data().as_ptr().cast::<bf16>(),
-            tensor.shape().iter().fold(1, |a, &x| a * x),
+            tensor.shape().iter().product(),
         )
     }
 }
