@@ -24,6 +24,12 @@ struct Args {
 
     #[arg()]
     text: String,
+
+    #[arg(short = 'p', long, default_value_t = 0f32)]
+    alpha_presence: f32,
+
+    #[arg(short = 'f', long, default_value_t = 0f32)]
+    alpha_frequency: f32,
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
@@ -675,13 +681,36 @@ fn main() -> Result<()> {
     );
     println!("Preprocess: {:?}", start.elapsed());
 
+    let mut alpha = vec![0usize; rwkv.emb.shape[0]];
+
     print!("{}", &args.text);
     std::io::stdout().flush().unwrap();
     for _ in 0..767 {
-        let (token, token_weight) = x.iter().enumerate().fold(
-            (0, f32::MIN),
-            |(mi, me), (ei, &e)| if e > me { (ei, e) } else { (mi, me) },
-        );
+        let (token, token_weight) = x
+            .iter()
+            .enumerate()
+            .map(|(ei, &e)| {
+                (
+                    ei,
+                    e - (alpha[ei] as f32 * args.alpha_frequency)
+                        - (if alpha[ei] > 0 {
+                            args.alpha_presence
+                        } else {
+                            0f32
+                        }),
+                )
+            })
+            .fold(
+                (0, f32::MIN),
+                |(mi, me), (ei, e)| if e > me { (ei, e) } else { (mi, me) },
+            );
+
+        // EOS
+        if token == 0 {
+            break;
+        }
+
+        alpha[token] += 1;
 
         // print!("{}[{};{}]", tokenizer.id_to_token(token as u32).unwrap_or("<UNK>".to_string()), token, token_weight);
         print!(
