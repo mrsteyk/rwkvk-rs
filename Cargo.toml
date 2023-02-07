@@ -11,7 +11,7 @@ lto = "thin"
 
 [dependencies]
 anyhow = "1.0"
-bytemuck = "1"
+bytemuck = { version = "1", features = ["extern_crate_alloc"] }
 clap = { version = "4.1.4", features = ["derive"] }
 half = { version = "2", features = ["bytemuck", "use-intrinsics"] }
 memmap2 = "0"

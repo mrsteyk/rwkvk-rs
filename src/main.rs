@@ -86,8 +86,8 @@ fn main() -> Result<()> {
             // println!("Block {}", i);
             let time_decay = model.tensor(&format!("blocks.{i}.att.time_decay")).unwrap();
             let time_first = model.tensor(&format!("blocks.{i}.att.time_first")).unwrap();
-            let time_decay = bytemuck::cast_slice::<_, f32>(time_decay.data());
-            let time_first = bytemuck::cast_slice::<_, f32>(time_first.data());
+            let time_decay = bytemuck::pod_collect_to_vec::<_, f32>(time_decay.data());
+            let time_first = bytemuck::pod_collect_to_vec::<_, f32>(time_first.data());
 
             let att = rwkv::Att {
                 key: model.tensor(&format!("blocks.{i}.att.key.weight")).unwrap(),

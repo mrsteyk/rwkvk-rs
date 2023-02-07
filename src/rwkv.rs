@@ -31,8 +31,8 @@ pub(crate) struct Att<'a> {
     // Can't be 16
     // pub time_decay: TensorView<'a>,
     // pub time_first: TensorView<'a>,
-    pub time_decay: &'a [f32],
-    pub time_first: &'a [f32],
+    pub time_decay: Vec<f32>,
+    pub time_first: Vec<f32>,
     // Can be 16
     pub time_mix_k: TensorView<'a>,
     pub time_mix_r: TensorView<'a>,
