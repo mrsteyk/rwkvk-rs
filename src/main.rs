@@ -22,6 +22,9 @@ struct Args {
     #[arg(short, long)]
     tokenizer: PathBuf,
 
+    #[arg(short, long)]
+    soft_emb: Option<PathBuf>,
+
     #[arg()]
     text: String,
 
@@ -96,25 +99,27 @@ impl Att<'_> {
         #[cfg(debug_assertions)]
         debug_assert_eq!(self.receptance.shape()[1], xr.len());
         let rw = get_bf16(&self.receptance);
-        let rw_len = self.receptance.shape()[0];
-        let r = (0..rw_len)
+        // This improved tokenization by a lot lmfao
+        let r = rw
+            .chunks_exact(xr.len())
             .map(|x| {
-                (0..xr.len())
-                    .map(|y| rw[xr.len() * x + y].to_f32() * xr[y])
+                x.iter()
+                    .zip(xr.iter())
+                    .map(|(&x, &y)| x.to_f32() * y)
                     .sum::<f32>()
             })
-            // .map(|x| bf16::from_f32(1f32 / (1f32 - x.to_f32().exp())))
             .map(|x| (1f32 / (1f32 + (-x).exp())))
             .collect::<Vec<_>>();
 
         #[cfg(debug_assertions)]
         debug_assert_eq!(self.key.shape()[1], xk.len());
         let kw = get_bf16(&self.key);
-        let kw_len = self.key.shape()[0];
-        let k = (0..kw_len)
+        let k = kw
+            .chunks_exact(xk.len())
             .map(|x| {
-                (0..xk.len())
-                    .map(|y| kw[xk.len() * x + y].to_f32() * xk[y])
+                x.iter()
+                    .zip(xk.iter())
+                    .map(|(&x, &y)| x.to_f32() * y)
                     .sum::<f32>()
             })
             .collect::<Vec<_>>();
@@ -122,11 +127,12 @@ impl Att<'_> {
         #[cfg(debug_assertions)]
         debug_assert_eq!(self.value.shape()[1], xv.len());
         let vw = get_bf16(&self.value);
-        let vw_len = self.value.shape()[0];
-        let v = (0..vw_len)
+        let v = vw
+            .chunks_exact(xv.len())
             .map(|x| {
-                (0..xv.len())
-                    .map(|y| vw[xv.len() * x + y].to_f32() * xv[y])
+                x.iter()
+                    .zip(xv.iter())
+                    .map(|(&x, &y)| x.to_f32() * y)
                     .sum::<f32>()
             })
             .collect::<Vec<_>>();
@@ -216,13 +222,14 @@ impl Att<'_> {
 
         let ow = get_bf16(&self.output);
         let ow_len = self.output.shape()[0];
-        (0..rwkv.len())
+        ow.chunks_exact(ow_len)
             .map(|x| {
-                (0..ow_len)
-                    .map(|y| ow[ow_len * x + y].to_f32() * rwkv[y])
+                x.iter()
+                    .zip(rwkv.iter())
+                    .map(|(&x, &y)| x.to_f32() * y)
                     .sum::<f32>()
             })
-            .collect::<Vec<_>>()
+            .collect()
     }
 }
 
@@ -271,11 +278,12 @@ impl Ffn<'_> {
         #[cfg(debug_assertions)]
         debug_assert_eq!(self.receptance.shape()[1], xr.len());
         let rw = get_bf16(&self.receptance);
-        let rw_len = self.receptance.shape()[0];
-        let r = (0..rw_len)
+        let r = rw
+            .chunks_exact(xr.len())
             .map(|x| {
-                (0..xr.len())
-                    .map(|y| rw[xr.len() * x + y].to_f32() * xr[y])
+                x.iter()
+                    .zip(xr.iter())
+                    .map(|(&x, &y)| x.to_f32() * y)
                     .sum::<f32>()
             })
             .map(|x| (1f32 / (1f32 + (-x).exp())))
@@ -284,12 +292,13 @@ impl Ffn<'_> {
         #[cfg(debug_assertions)]
         debug_assert_eq!(self.key.shape()[1], xk.len());
         let kw = get_bf16(&self.key);
-        let kw_len = self.key.shape()[0];
         // println!("{:?} {:?}", self.key.shape(), xk.len());
-        let k = (0..kw_len)
+        let k = kw
+            .chunks_exact(xk.len())
             .map(|x| {
-                (0..xk.len())
-                    .map(|y| kw[xk.len() * x + y].to_f32() * xk[y])
+                x.iter()
+                    .zip(xk.iter())
+                    .map(|(&x, &y)| x.to_f32() * y)
                     .sum::<f32>()
             })
             .map(|x| if x.is_sign_positive() { x } else { 0f32 })
@@ -297,10 +306,10 @@ impl Ffn<'_> {
             .collect::<Vec<_>>();
 
         let vw = get_bf16(&self.value);
-        let vw_len = self.value.shape()[0];
-        let kv = (0..vw_len).map(|x| {
-            (0..k.len())
-                .map(|y| vw[k.len() * x + y].to_f32() * k[y])
+        let kv = vw.chunks_exact(k.len()).map(|x| {
+            x.iter()
+                .zip(k.iter())
+                .map(|(&x, &y)| x.to_f32() * y)
                 .sum::<f32>()
         });
 
@@ -315,21 +324,24 @@ struct Ln<'a> {
 }
 
 impl Ln<'_> {
-    pub fn apply_bf16(&self, other: &[bf16]) -> Option<Vec<f32>> {
+    pub fn apply_f32(&self, other: &[f32]) -> Option<Vec<f32>> {
         if self.weight.shape()[0] != other.len() {
             None
         } else {
             // TODO: is converting to f32 worth it?
-            const NORM_EPS: f32 = 1e5;
+            const NORM_EPS: f32 = 1e-5;
 
             // What the fuck
+            // Collecting is a bit faster???
             let lenf = other.len() as f32;
-            let mean: f32 = other.iter().map(|&x| x.to_f32()).sum();
+            let mean: f32 = other.iter().map(|&x| x).sum();
             let mean = mean / lenf;
-            let other = other.iter().map(|&x| x.to_f32() - mean);
-            let sum2: f32 = other.clone().map(|x| x * x).sum();
+            let other = other.iter().map(|&x| x - mean).collect::<Vec<_>>();
+            let sum2: f32 = other.iter().map(|x| x * x).sum();
             let sum2 = sum2 / (lenf) + NORM_EPS;
-            let other = other.map(|x| (x / sum2.sqrt()));
+            // let sum = sum2.sqrt(); // this is slower?
+            // this is same speed as mutating the array normally, rustc is so much smarter now lmao
+            let other = other.iter().map(|x| (x / sum2.sqrt()));
 
             let w = get_bf16(&self.weight);
             let b = get_bf16(&self.bias);
@@ -344,30 +356,30 @@ impl Ln<'_> {
         }
     }
 
-    pub fn apply_f32(&self, other: &[f32]) -> Option<Vec<f32>> {
-        if self.weight.shape()[0] != other.len() {
+    pub fn apply_f32_f(other: &[f32], w: &[f32], b: &[f32]) -> Option<Vec<f32>> {
+        if w.len() != other.len() {
             None
         } else {
             // TODO: is converting to f32 worth it?
             const NORM_EPS: f32 = 1e-5;
 
             // What the fuck
+            // Collecting is a bit faster???
             let lenf = other.len() as f32;
             let mean: f32 = other.iter().map(|&x| x).sum();
             let mean = mean / lenf;
-            let other = other.iter().map(|&x| x - mean);
-            let sum2: f32 = other.clone().map(|x| x * x).sum();
+            let other = other.iter().map(|&x| x - mean).collect::<Vec<_>>();
+            let sum2: f32 = other.iter().map(|x| x * x).sum();
             let sum2 = sum2 / (lenf) + NORM_EPS;
-            let other = other.map(|x| (x / sum2.sqrt()));
-
-            let w = get_bf16(&self.weight);
-            let b = get_bf16(&self.bias);
+            // let sum = sum2.sqrt(); // this is slower?
+            // this is same speed as mutating the array normally, rustc is so much smarter now lmao
+            let other = other.iter().map(|x| (x / sum2.sqrt()));
 
             Some(
                 other
                     .zip(w.iter())
                     .zip(b.iter())
-                    .map(|((x, &w), &b)| (x * w.to_f32()) + b.to_f32())
+                    .map(|((x, &w), &b)| (x * w) + b)
                     .collect(),
             )
         }
@@ -404,6 +416,7 @@ struct Emb<'a> {
     pub tensor: TensorView<'a>,
 }
 
+#[allow(dead_code)]
 impl<'a> Emb<'a> {
     pub fn new(tensor: TensorView<'a>) -> Self {
         Self { tensor }
@@ -436,16 +449,22 @@ struct EmbOptim {
     pub shape: [usize; 2],
 }
 
+#[allow(unused_variables)]
 impl EmbOptim {
     pub fn new(emb: &Emb, ln0: &Ln) -> Self {
         let shape = emb.shape();
-        let emb = (0..emb.tokens())
-            .map(|i| {
-                let emb = emb.get(i).unwrap().to_vec();
-                // ln0.apply_bf16(&emb).unwrap()
-                emb.iter().map(|&x| x.to_f32()).collect()
-            })
-            .collect();
+        // let emb = (0..emb.tokens())
+        //     .map(|i| {
+        //         let emb = emb.get(i).unwrap().to_vec();
+        //         // ln0.apply_bf16(&emb).unwrap()
+        //         emb.iter().map(|&x| x.to_f32()).collect()
+        //     })
+        //     .collect();
+        // This is kind of faster?
+        let emb = get_bf16(&emb.tensor)
+            .chunks_exact(emb.nembed())
+            .map(|x| x.iter().map(|&x| x.to_f32()).collect::<Vec<_>>())
+            .collect::<Vec<_>>();
         Self {
             emb,
             shape: [shape[0], shape[1]],
@@ -494,11 +513,19 @@ impl RWKV<'_> {
 
         let xx = self.ln_out.apply_f32(&xx).unwrap();
         let h = get_bf16(&self.head);
-        let h_len = self.head.shape()[0];
-        (0..h_len)
+        // let h_len = self.head.shape()[0];
+        // (0..h_len)
+        //     .map(|x| {
+        //         (0..xx.len())
+        //             .map(|y| h[xx.len() * x + y].to_f32() * xx[y])
+        //             .sum::<f32>()
+        //     })
+        //     .collect()
+        h.chunks_exact(xx.len())
             .map(|x| {
-                (0..xx.len())
-                    .map(|y| h[xx.len() * x + y].to_f32() * xx[y])
+                x.iter()
+                    .zip(xx.iter())
+                    .map(|(&x, &y)| x.to_f32() * y)
                     .sum::<f32>()
             })
             .collect()
@@ -649,7 +676,12 @@ fn main() -> Result<()> {
         ln_out,
     };
     let load = start.elapsed();
-    println!("RWKV load: {:?} ({:?})", load, load - optim_embed);
+    println!(
+        "RWKV load: {:?} ({:?} {:?})",
+        load,
+        optim_embed,
+        load - optim_embed
+    );
 
     let start = Instant::now();
     let tokens = tokenizer
@@ -659,7 +691,6 @@ fn main() -> Result<()> {
         .to_vec();
     println!("Tokenization: {:?} {:?}", start.elapsed(), &tokens);
 
-    let start = Instant::now();
     let mut state = vec![
         StateElem {
             ffn_x: vec![0f32; rwkv.emb.shape[1]],
@@ -670,6 +701,79 @@ fn main() -> Result<()> {
         };
         rwkv.blocks.len()
     ];
+    let start = Instant::now();
+    if let Some(soft_emb) = args.soft_emb {
+        let model_file = File::open(soft_emb).context("error openning model file!")?;
+        let map = unsafe { Mmap::map(&model_file).context("error mmaping model")? };
+        let model = SafeTensors::deserialize(&map[..]).context("error parsing safetensor file")?;
+
+        let soft = &model.tensors()[0].1;
+        // This is not that much faster... idk why LN takes so much time... perhaps all that conversion between bf16 and f32...
+        // let w = get_bf16(&ln0.weight).iter().map(|&x| x.to_f32()).collect::<Vec<_>>();
+        // let b = get_bf16(&ln0.bias).iter().map(|&x| x.to_f32()).collect::<Vec<_>>();
+        // for i in 0..soft.shape()[0] {
+        //     rwkv.forward_raw_preproc(
+        //         // &Ln::apply_f32_f(
+        //         // F32 is faster by like 0.05s??? F32+ln0.F32 is faster than F32 by like 0.01s??? what the fuck did I do to make it so slow
+        //         &match soft.dtype() {
+        //             safetensors::tensor::Dtype::BF16 => ln0.apply_f32(
+        //                 &get_row_2d_bf16(soft, i)
+        //                     .iter()
+        //                     .map(|&x| x.to_f32())
+        //                     .collect::<Vec<_>>(),
+        //             ),
+        //             safetensors::tensor::Dtype::F32 => {
+        //                 let len = soft.shape()[1];
+        //                 let size = len * 4;
+        //                 ln0.apply_f32(unsafe {
+        //                     &*slice_from_raw_parts(
+        //                         soft.data()[size * i..size * i + size]
+        //                             .as_ptr()
+        //                             .cast::<f32>(),
+        //                         len,
+        //                     )
+        //                 })
+        //             }
+        //             _ => unreachable!(),
+        //         }
+        //         .unwrap(),
+        //         &mut state,
+        //     );
+        // }
+        // ---
+        // This is somehow slower??? But I don't think benchmarks are fair because I am at the liberty of OS kernel
+        let w = get_bf16(&ln0.weight)
+            .iter()
+            .map(|&x| x.to_f32())
+            .collect::<Vec<_>>();
+        let b = get_bf16(&ln0.bias)
+            .iter()
+            .map(|&x| x.to_f32())
+            .collect::<Vec<_>>();
+        match soft.dtype() {
+            safetensors::tensor::Dtype::BF16 => get_bf16(&soft)
+                .chunks_exact(soft.shape()[1])
+                .map(|x| {
+                    Ln::apply_f32_f(&x.iter().map(|&x| x.to_f32()).collect::<Vec<_>>(), &w, &b)
+                        .unwrap()
+                })
+                .for_each(|x| {
+                    rwkv.forward_raw_preproc(&x, &mut state);
+                }),
+            safetensors::tensor::Dtype::F32 => unsafe {
+                &*slice_from_raw_parts(
+                    soft.data().as_ptr().cast::<f32>(),
+                    soft.shape().iter().fold(1, |x, &y| x * y),
+                )
+            }
+            .chunks_exact(soft.shape()[1])
+            .for_each(|x| {
+                rwkv.forward_raw_preproc(&x, &mut state);
+            }),
+            _ => unreachable!(),
+        }
+    }
+    let soft_elapsed = start.elapsed();
     for &i in &tokens[..tokens.len() - 1] {
         let e = rwkv.emb.get(i as usize).unwrap();
         rwkv.forward_raw_preproc(e, &mut state);
@@ -679,13 +783,20 @@ fn main() -> Result<()> {
         rwkv.emb.get(tokens[tokens.len() - 1] as usize).unwrap(),
         &mut state,
     );
-    println!("Preprocess: {:?}", start.elapsed());
+    let preproc = start.elapsed();
+    println!(
+        "Preprocess: {:?} ({:?} {:?})",
+        preproc,
+        soft_elapsed,
+        preproc - soft_elapsed
+    );
 
     let mut alpha = vec![0usize; rwkv.emb.shape[0]];
 
     print!("{}", &args.text);
     std::io::stdout().flush().unwrap();
     for _ in 0..767 {
+        #[allow(unused_variables)]
         let (token, token_weight) = x
             .iter()
             .enumerate()
