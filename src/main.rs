@@ -2,12 +2,13 @@ use std::{fs::File, io::Write, path::PathBuf, time::Instant};
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use half::prelude::*;
 use memmap2::Mmap;
-use safetensors::tensor::{SafeTensors, TensorView};
+use safetensors::tensor::SafeTensors;
 use tokenizers::tokenizer::Tokenizer;
 
 pub mod rwkv;
+mod utils;
+use utils::*;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -145,6 +146,7 @@ fn main() -> Result<()> {
         blocks,
         head,
         ln_out,
+        ln0: None,
     };
     let load = start.elapsed();
     println!(
@@ -236,11 +238,13 @@ fn main() -> Result<()> {
                     rwkv.forward_raw_preproc(&x, &mut state);
                 }),
             // Small performance penalty?
-            safetensors::tensor::Dtype::F32 => bytemuck::cast_slice::<_, f32>(&soft.data().to_vec())
-                .chunks_exact(soft.shape()[1])
-                .for_each(|x| {
-                    rwkv.forward_raw_preproc(x, &mut state);
-                }),
+            safetensors::tensor::Dtype::F32 => {
+                bytemuck::pod_collect_to_vec::<_, f32>(soft.data())
+                    .chunks_exact(soft.shape()[1])
+                    .for_each(|x| {
+                        rwkv.forward_raw_preproc(x, &mut state);
+                    })
+            }
             _ => unreachable!(),
         }
     }
@@ -308,15 +312,4 @@ fn main() -> Result<()> {
 
     println!();
     Ok(())
-}
-
-fn get_row_2d_bf16<'a>(emb: &TensorView<'a>, row: usize) -> &'a [bf16] {
-    let len = emb.shape()[1];
-    let row_size = len * 2;
-    let idx = row_size * row;
-    bytemuck::cast_slice(&emb.data()[idx..idx + row_size])
-}
-
-fn get_bf16<'a>(tensor: &TensorView<'a>) -> &'a [bf16] {
-    bytemuck::cast_slice(tensor.data())
 }

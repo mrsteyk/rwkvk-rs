@@ -1,13 +1,11 @@
-use super::get_bf16;
-use super::get_row_2d_bf16;
-
-use std;
+use crate::utils::get_bf16;
+use crate::utils::get_row_2d_bf16;
 
 use half::prelude::*;
 use safetensors::tensor::TensorView;
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
-pub(crate) struct StateElem {
+pub struct StateElem {
     // 0
     pub ffn_x: Vec<f32>,
     // 1
@@ -22,7 +20,7 @@ pub(crate) struct StateElem {
 
 // SA means Sparse Attention?
 #[derive(Debug)]
-pub(crate) struct Att<'a> {
+pub struct Att<'a> {
     // Can be 16
     pub key: TensorView<'a>,
     pub output: TensorView<'a>,
@@ -205,7 +203,7 @@ impl Att<'_> {
 }
 
 #[derive(Debug)]
-pub(crate) struct Ffn<'a> {
+pub struct Ffn<'a> {
     // Can be 16
     pub key: TensorView<'a>,
     pub receptance: TensorView<'a>,
@@ -289,7 +287,7 @@ impl Ffn<'_> {
 }
 
 #[derive(Debug)]
-pub(crate) struct Ln<'a> {
+pub struct Ln<'a> {
     pub weight: TensorView<'a>,
     pub bias: TensorView<'a>,
 }
@@ -358,7 +356,7 @@ impl Ln<'_> {
 }
 
 #[derive(Debug)]
-pub(crate) struct Block<'a> {
+pub struct Block<'a> {
     pub att: Att<'a>,
     pub ffn: Ffn<'a>,
     // pub ln0: Option<Ln<'a>>,
@@ -383,7 +381,7 @@ impl Block<'_> {
 }
 
 #[derive(Debug)]
-pub(crate) struct Emb<'a> {
+pub struct Emb<'a> {
     pub tensor: TensorView<'a>,
 }
 
@@ -415,7 +413,7 @@ impl<'a> Emb<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
-pub(crate) struct EmbOptim {
+pub struct EmbOptim {
     pub emb: Vec<Vec<f32>>,
     pub shape: [usize; 2],
 }
@@ -443,9 +441,10 @@ impl EmbOptim {
     }
 }
 
-pub(crate) struct Rwkv<'a> {
+pub struct Rwkv<'a> {
     // pub emb: Emb<'a>,
     pub emb: EmbOptim,
+    pub ln0: Option<Ln<'a>>,
     pub blocks: Vec<Block<'a>>,
     pub ln_out: Ln<'a>,
     pub head: TensorView<'a>,

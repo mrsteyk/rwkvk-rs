@@ -1,2 +1,4 @@
 [target.'cfg(any(windows, unix))']
+# 64 - Preprocess: 191.150488ms (52ns 191.150436ms)
+# 16 - Preprocess: 144.852464ms (43ns 144.852421ms)
 rustflags = ["-C", "target-cpu=native", "-C", "llvm-args=-ffast-math", "-C", "opt-level=3", "-C", "llvm-args=-force-vector-width=16"]
