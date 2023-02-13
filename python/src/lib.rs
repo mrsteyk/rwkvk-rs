@@ -2,6 +2,25 @@ use std::{pin::Pin, sync::Arc};
 
 use pyo3::{prelude::*, types::PyList};
 
+#[derive(Debug)]
+enum RwkvError {
+    InvalidToken(usize),
+    EmptyArray,
+}
+
+impl std::fmt::Display for RwkvError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RwkvError::InvalidToken(n) => f.write_fmt(format_args!("Invalid Token: {:?}", n)),
+            RwkvError::EmptyArray => f.write_str("Empty array"),
+        }
+    }
+}
+
+impl std::error::Error for RwkvError {
+    // ???
+}
+
 #[pyclass]
 struct Rwkv {
     inner: Arc<Pin<Box<rwkvk_rs::RwkvWrap<'static>>>>,
@@ -52,6 +71,9 @@ impl Rwkv {
 
     pub fn forward_raw_batch(&self, tokens: &PyList, state: &mut State) -> PyResult<Vec<f32>> {
         let tokens: Vec<Vec<f32>> = tokens.extract()?;
+        if tokens.len() == 0 {
+            return Err(anyhow::anyhow!(RwkvError::EmptyArray).into());
+        }
         for token in tokens.iter().take(tokens.len()-1) {
             self.inner.rwkv().forward_raw_preproc(token, &mut state.inner);
         }
@@ -59,17 +81,21 @@ impl Rwkv {
     }
 
     pub fn forward_token(&self, token: usize, state: &mut State) -> PyResult<Vec<f32>> {
-        let x = self.inner.rwkv().emb.get(token).unwrap();
+        let x = self.inner.rwkv().emb.get(token).ok_or(anyhow::anyhow!(RwkvError::InvalidToken(token)))?;
         Ok(self.inner.rwkv().forward_raw(x, &mut state.inner))
     }
 
     pub fn forward(&self, tokens: &PyList, state: &mut State) -> PyResult<Vec<f32>> {
         let tokens: Vec<usize> = tokens.extract()?;
+        if tokens.len() == 0 {
+            return Err(anyhow::anyhow!(RwkvError::EmptyArray).into());
+        }
         for &token in tokens.iter().take(tokens.len()-1) {
-            let token = self.inner.rwkv().emb.get(token).unwrap();
+            let token = self.inner.rwkv().emb.get(token).ok_or(anyhow::anyhow!(RwkvError::InvalidToken(token)))?;
             self.inner.rwkv().forward_raw_preproc(token, &mut state.inner);
         }
-        let token = self.inner.rwkv().emb.get(*tokens.last().unwrap()).unwrap();
+        let token = *tokens.last().unwrap();
+        let token = self.inner.rwkv().emb.get(token).ok_or(anyhow::anyhow!(RwkvError::InvalidToken(token)))?;
         Ok(self.inner.rwkv().forward_raw(token, &mut state.inner))
     }
 }
