@@ -52,10 +52,10 @@ impl Rwkv {
 
     pub fn forward(&self, tokens: &PyList, state: &mut State) -> PyResult<Vec<f32>> {
         let tokens: Vec<Vec<f32>> = tokens.extract()?;
-        for i in 0..tokens.len()-1 {
-            self.inner.rwkv().forward_raw_preproc(&tokens[i], &mut state.inner);
+        for token in tokens.iter().take(tokens.len()-1) {
+            self.inner.rwkv().forward_raw_preproc(token, &mut state.inner);
         }
-        Ok(self.inner.rwkv().forward_raw(&tokens.last().unwrap(), &mut state.inner))
+        Ok(self.inner.rwkv().forward_raw(tokens.last().unwrap(), &mut state.inner))
     }
 }
 
