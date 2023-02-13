@@ -80,6 +80,12 @@ impl Rwkv {
         Ok(self.inner.rwkv().forward_raw(tokens.last().unwrap(), &mut state.inner))
     }
 
+    pub fn forward_token_preproc(&self, token: usize, state: &mut State) -> PyResult<()> {
+        let x = self.inner.rwkv().emb.get(token).ok_or(anyhow::anyhow!(RwkvError::InvalidToken(token)))?;
+        self.inner.rwkv().forward_raw_preproc(x, &mut state.inner);
+        Ok(())
+    }
+
     pub fn forward_token(&self, token: usize, state: &mut State) -> PyResult<Vec<f32>> {
         let x = self.inner.rwkv().emb.get(token).ok_or(anyhow::anyhow!(RwkvError::InvalidToken(token)))?;
         Ok(self.inner.rwkv().forward_raw(x, &mut state.inner))
