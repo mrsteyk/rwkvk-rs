@@ -6,6 +6,12 @@ Notable tech stack uses are [memmap2](https://github.com/RazrFalcon/memmap2-rs) 
 
 # FAQ
 
+### How to install?
+
+```
+cargo +nightly install --git https://github.com/mrsteyk/rwkvk-rs --features="build-binary"
+```
+
 ### How do I get a model for this?
 
 Either download one from [hf:mrsteyk/RWKV-LM-safetensors](https://huggingface.co/mrsteyk/RWKV-LM-safetensors/tree/main) or convert yourself using `convert_safetensors.py` from [gh:mrsteyk/RWKV-LM-deepspeed](https://github.com/mrsteyk/RWKV-LM-deepspeed) with arguments `--bf16 --rnn`. Make sure to read the next section about alignment.
