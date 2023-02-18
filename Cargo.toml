@@ -21,12 +21,14 @@ safetensors = "0.2.8"
 clap = { version = "4.1.4", features = ["derive"], optional = true }
 tokenizers = { version = "0.13", default-features = false, features = ["esaxx_fast", "fancy-regex", "onig"], optional = true }
 cblas = { version = "0.4", optional = true }
-blas-src = { version = "0.8", features = ["blis"], optional = true }
-blis-src = { version = "0.2", features = ["static", "pthreads"], optional = true }
+blas-src = { version = "0.8", features = ["openblas"], optional = true }
+# blis-src = { version = "0.2", features = ["static", "pthreads"], optional = true }
+openblas-src = { version = "0.10", optional = true }
 
 [features]
 build-binary = ["clap", "tokenizers"]
-rust-blas = ["cblas", "blas-src", "blis-src"]
+# rust-blas = ["cblas", "blas-src", "blis-src"]
+rust-blas = ["cblas", "blas-src", "openblas-src"]
 
 [[bin]]         
 name = "rwkvk-rs"

@@ -43,6 +43,7 @@ fn main() -> Result<()> {
     let start = Instant::now();
     let model_file = File::open(args.model).context("error openning model file!")?;
     let map = unsafe { Mmap::map(&model_file).context("error mmaping model")? };
+    // let map = std::fs::read(args.model).context("error reading model file!")?;
     let model = SafeTensors::deserialize(&map[..]).context("error parsing safetensor file")?;
     println!("SafeTensors parse: {:?}", start.elapsed());
 

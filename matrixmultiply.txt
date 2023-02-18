@@ -7,8 +7,23 @@
 7b, mine, 3 tokens
 47s
 
-7b openblas, 3 tokens
+7b BLIS?, 3 tokens
 50s
+
+7b OpenBLAS, 3 tokens, this satures CPU almost completely...
+81s, 68s, 66s, 58s
+
+430m, OpenBLAS, 3 tokens, no mmap
+418ms, 414ms
+
+1.5b, OpenBLAS, 3 tokens, no mmap
+1.48s, 1.54s
+
+430m, LLVM, 3 tokens, no mmap
+166ms, 169ms
+
+1.5b, LLVM, 3 tokens, no mmap
+624ms, 613ms, 610ms, 616ms
 
 Please test for yourself and tell me if I am a big moron or something...
 Even OpenBLAS is slower? LLVM is confirmed smartass?
