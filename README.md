@@ -1,10 +1,10 @@
-# RWKV, but in Rust...
+# RWKV, but in Rust
 
 This is pretty much your usual RWKV, but it follows the RIIR principle.
 
 Notable tech stack uses are [memmap2](https://github.com/RazrFalcon/memmap2-rs) and [safetensors](https://github.com/huggingface/safetensors).
 
-# FAQ
+## FAQ
 
 ### How to install?
 
@@ -12,6 +12,14 @@ This can break and if it does use `--rev` or `--tag` flags to specify which vers
 
 ```sh
 cargo +nightly install --git https://github.com/mrsteyk/rwkvk-rs --features="build-binary"
+```
+
+### How to run?
+
+Example:
+
+```sh
+cargo run --features build-binary --release -- -t ../../RWKV-LM-deepspeed/20B_tokenizer_openchatgpt.json -m ../../RWKV-LM-deepspeed/RWKV-v4neo/RWKV-4-Pile-430M-20220808-8066.rnn.bf16.safetensors "hi!"
 ```
 
 ### How do I get a model for this?

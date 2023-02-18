@@ -67,45 +67,145 @@ impl Att<'_> {
         // mat by vec
         #[cfg(debug_assertions)]
         debug_assert_eq!(self.receptance.shape()[1], xr.len());
-        let rw = get_bf16(&self.receptance);
-        // This improved tokenization by a lot lmfao
-        let r = rw
-            .chunks_exact(xr.len())
-            .map(|x| {
-                x.iter()
-                    .zip(xr.iter())
-                    .map(|(&x, &y)| x.to_f32() * y)
-                    .sum::<f32>()
-            })
-            .map(|x| (1f32 / (1f32 + (-x).exp())))
-            .collect::<Vec<_>>();
+        #[cfg(not(feature = "rust-blas"))]
+        let r = {
+            let rw = get_bf16(&self.receptance);
+            // This improved tokenization by a lot lmfao
+            rw.chunks_exact(xr.len())
+                .map(|x| {
+                    x.iter()
+                        .zip(xr.iter())
+                        .map(|(&x, &y)| x.to_f32() * y)
+                        .sum::<f32>()
+                })
+                .map(|x| (1f32 / (1f32 + (-x).exp())))
+                .collect::<Vec<_>>()
+        };
+        #[cfg(feature = "rust-blas")]
+        let r = {
+            let rw = get_bf16(&self.receptance)
+                .iter()
+                .map(|&x| x.to_f32())
+                .collect::<Vec<_>>();
+            let mut r = Vec::<f32>::with_capacity(self.receptance.shape()[0]);
+            unsafe {
+                matrixmultiply::sgemm(
+                    self.receptance.shape()[0],
+                    self.receptance.shape()[1],
+                    1,
+                    // ---
+                    1.,
+                    rw.as_ptr(),
+                    xr.len() as isize,
+                    1,
+                    // ---
+                    xr.as_ptr(),
+                    1,
+                    xr.len() as isize,
+                    // ---
+                    0.,
+                    r.as_mut_ptr(),
+                    1,
+                    xr.len() as isize,
+                );
+                r.set_len(self.receptance.shape()[0])
+            }
+            r.iter_mut().for_each(|a| *a = 1f32 / (1f32 + (-*a).exp()));
+            r
+        };
 
         #[cfg(debug_assertions)]
         debug_assert_eq!(self.key.shape()[1], xk.len());
-        let kw = get_bf16(&self.key);
-        let k = kw
-            .chunks_exact(xk.len())
-            .map(|x| {
-                x.iter()
-                    .zip(xk.iter())
-                    .map(|(&x, &y)| x.to_f32() * y)
-                    .sum::<f32>()
-            })
-            .collect::<Vec<_>>();
+        #[cfg(not(feature = "rust-blas"))]
+        let k = {
+            let kw = get_bf16(&self.key);
+            kw.chunks_exact(xk.len())
+                .map(|x| {
+                    x.iter()
+                        .zip(xk.iter())
+                        .map(|(&x, &y)| x.to_f32() * y)
+                        .sum::<f32>()
+                })
+                .collect::<Vec<_>>()
+        };
+        #[cfg(feature = "rust-blas")]
+        let k = {
+            let kw = get_bf16(&self.key)
+                .iter()
+                .map(|&x| x.to_f32())
+                .collect::<Vec<_>>();
+            let mut k = Vec::<f32>::with_capacity(self.key.shape()[0]);
+            unsafe {
+                matrixmultiply::sgemm(
+                    self.key.shape()[0],
+                    self.key.shape()[1],
+                    1,
+                    // ---
+                    1.,
+                    kw.as_ptr(),
+                    xk.len() as isize,
+                    1,
+                    // ---
+                    xk.as_ptr(),
+                    1,
+                    xk.len() as isize,
+                    // ---
+                    0.,
+                    k.as_mut_ptr(),
+                    1,
+                    xk.len() as isize,
+                );
+                k.set_len(self.key.shape()[0])
+            }
+            k
+        };
 
         #[cfg(debug_assertions)]
         debug_assert_eq!(self.value.shape()[1], xv.len());
-        let vw = get_bf16(&self.value);
-        let v = vw
-            .chunks_exact(xv.len())
-            .map(|x| {
-                x.iter()
-                    .zip(xv.iter())
-                    .map(|(&x, &y)| x.to_f32() * y)
-                    .sum::<f32>()
-            })
-            .collect::<Vec<_>>();
+        #[cfg(not(feature = "rust-blas"))]
+        let v = {
+            let vw = get_bf16(&self.value);
+            vw.chunks_exact(xv.len())
+                .map(|x| {
+                    x.iter()
+                        .zip(xv.iter())
+                        .map(|(&x, &y)| x.to_f32() * y)
+                        .sum::<f32>()
+                })
+                .collect::<Vec<_>>()
+        };
 
+        #[cfg(feature = "rust-blas")]
+        let v = {
+            let vw = get_bf16(&self.value)
+                .iter()
+                .map(|&x| x.to_f32())
+                .collect::<Vec<_>>();
+            let mut v = Vec::<f32>::with_capacity(self.value.shape()[0]);
+            unsafe {
+                matrixmultiply::sgemm(
+                    self.value.shape()[0],
+                    self.value.shape()[1],
+                    1,
+                    // ---
+                    1.,
+                    vw.as_ptr(),
+                    xv.len() as isize,
+                    1,
+                    // ---
+                    xv.as_ptr(),
+                    1,
+                    xv.len() as isize,
+                    // ---
+                    0.,
+                    v.as_mut_ptr(),
+                    1,
+                    xv.len() as isize,
+                );
+                v.set_len(self.value.shape()[0])
+            }
+            v
+        };
         let aa = &state.att_a;
         let bb = &state.att_b;
         let pp = &state.att_p;
@@ -478,5 +578,56 @@ impl Rwkv<'_> {
                     .sum::<f32>()
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod test {
+    #[cfg(feature="rust-blas")]
+    #[test]
+    fn matrixmultiply_text() {
+        let xv = vec![1f32, 2., 3.];
+        let vw = vec![10f32, 0f32, 5f32, 9f32, 0.5f32, 3f32];
+        let shape = &[2usize, 3usize];
+
+        let v = {
+            vw.chunks_exact(xv.len())
+                .map(|x| {
+                    x.iter()
+                        .zip(xv.iter())
+                        .map(|(&x, &y)| x * y)
+                        .sum::<f32>()
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let va = {
+            let mut v = Vec::<f32>::with_capacity(shape[0]);
+            unsafe {
+                matrixmultiply::sgemm(
+                    shape[0],
+                    shape[1],
+                    1,
+                    // ---
+                    1.,
+                    vw.as_ptr(),
+                    xv.len() as isize,
+                    1,
+                    // ---
+                    xv.as_ptr(),
+                    1,
+                    xv.len() as isize,
+                    // ---
+                    0.,
+                    v.as_mut_ptr(),
+                    1,
+                    xv.len() as isize,
+                );
+                v.set_len(shape[0])
+            }
+            v
+        };
+
+        assert_eq!(v, va);
     }
 }
