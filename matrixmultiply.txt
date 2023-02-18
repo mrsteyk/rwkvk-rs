@@ -7,4 +7,8 @@
 7b, mine, 3 tokens
 47s
 
+7b openblas, 3 tokens
+50s
+
 Please test for yourself and tell me if I am a big moron or something...
+Even OpenBLAS is slower? LLVM is confirmed smartass?

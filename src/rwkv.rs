@@ -4,6 +4,11 @@ use crate::utils::get_row_2d_bf16;
 use half::prelude::*;
 use safetensors::tensor::TensorView;
 
+#[cfg(feature="rust-blas")]
+extern crate cblas;
+#[cfg(feature="rust-blas")]
+extern crate blas_src;
+
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub struct StateElem {
     // 0
@@ -89,24 +94,22 @@ impl Att<'_> {
                 .collect::<Vec<_>>();
             let mut r = Vec::<f32>::with_capacity(self.receptance.shape()[0]);
             unsafe {
-                matrixmultiply::sgemm(
-                    self.receptance.shape()[0],
-                    self.receptance.shape()[1],
-                    1,
+                cblas::sgemv(
+                    cblas::Layout::RowMajor,
+                    cblas::Transpose::None,
+                    self.receptance.shape()[0] as i32,
+                    self.receptance.shape()[1] as i32,
                     // ---
                     1.,
-                    rw.as_ptr(),
-                    xr.len() as isize,
-                    1,
+                    &rw,
+                    xr.len() as i32,
                     // ---
-                    xr.as_ptr(),
+                    &xr,
                     1,
-                    xr.len() as isize,
                     // ---
                     0.,
-                    r.as_mut_ptr(),
+                    &mut r,
                     1,
-                    xr.len() as isize,
                 );
                 r.set_len(self.receptance.shape()[0])
             }
@@ -136,24 +139,22 @@ impl Att<'_> {
                 .collect::<Vec<_>>();
             let mut k = Vec::<f32>::with_capacity(self.key.shape()[0]);
             unsafe {
-                matrixmultiply::sgemm(
-                    self.key.shape()[0],
-                    self.key.shape()[1],
-                    1,
+                cblas::sgemv(
+                    cblas::Layout::RowMajor,
+                    cblas::Transpose::None,
+                    self.key.shape()[0] as i32,
+                    self.key.shape()[1] as i32,
                     // ---
                     1.,
-                    kw.as_ptr(),
-                    xk.len() as isize,
-                    1,
+                    &kw,
+                    xk.len() as i32,
                     // ---
-                    xk.as_ptr(),
+                    &xk,
                     1,
-                    xk.len() as isize,
                     // ---
                     0.,
-                    k.as_mut_ptr(),
+                    &mut k,
                     1,
-                    xk.len() as isize,
                 );
                 k.set_len(self.key.shape()[0])
             }
@@ -183,24 +184,22 @@ impl Att<'_> {
                 .collect::<Vec<_>>();
             let mut v = Vec::<f32>::with_capacity(self.value.shape()[0]);
             unsafe {
-                matrixmultiply::sgemm(
-                    self.value.shape()[0],
-                    self.value.shape()[1],
-                    1,
+                cblas::sgemv(
+                    cblas::Layout::RowMajor,
+                    cblas::Transpose::None,
+                    self.value.shape()[0] as i32,
+                    self.value.shape()[1] as i32,
                     // ---
                     1.,
-                    vw.as_ptr(),
-                    xv.len() as isize,
-                    1,
+                    &vw,
+                    xv.len() as i32,
                     // ---
-                    xv.as_ptr(),
+                    &xv,
                     1,
-                    xv.len() as isize,
                     // ---
                     0.,
-                    v.as_mut_ptr(),
+                    &mut v,
                     1,
-                    xv.len() as isize,
                 );
                 v.set_len(self.value.shape()[0])
             }
@@ -587,7 +586,7 @@ mod test {
     #[test]
     fn matrixmultiply_text() {
         let xv = vec![1f32, 2., 3.];
-        let vw = vec![10f32, 0f32, 5f32, 9f32, 0.5f32, 3f32];
+        let vw = vec![10f32, 0.001f32, 5f32, 9f32, 0.5f32, 3f32];
         let shape = &[2usize, 3usize];
 
         let v = {
@@ -604,24 +603,22 @@ mod test {
         let va = {
             let mut v = Vec::<f32>::with_capacity(shape[0]);
             unsafe {
-                matrixmultiply::sgemm(
-                    shape[0],
-                    shape[1],
-                    1,
+                cblas::sgemv(
+                    cblas::Layout::RowMajor,
+                    cblas::Transpose::None,
+                    shape[0] as i32,
+                    shape[1] as i32,
                     // ---
                     1.,
-                    vw.as_ptr(),
-                    xv.len() as isize,
-                    1,
+                    &vw,
+                    xv.len() as i32,
                     // ---
-                    xv.as_ptr(),
+                    &xv,
                     1,
-                    xv.len() as isize,
                     // ---
                     0.,
-                    v.as_mut_ptr(),
+                    &mut v,
                     1,
-                    xv.len() as isize,
                 );
                 v.set_len(shape[0])
             }

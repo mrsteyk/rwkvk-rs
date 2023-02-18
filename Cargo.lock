@@ -51,6 +51,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a"
 
 [[package]]
+name = "blas-src"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bb48fbaa7a0cb9d6d96c46bac6cedb16f13a10aebcef1c4e73515aaae8c9909d"
+dependencies = [
+ "blis-src",
+]
+
+[[package]]
+name = "blis-src"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "890f81b2cda67a66e45ae13a35363502e84d6a7da86e429d609ede4f3463d086"
+
+[[package]]
 name = "bytemuck"
 version = "1.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -68,6 +83,26 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "cblas"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3de46dff748ed7e891bc46faae117f48d2a7911041c6630aed3c61a3fe12326f"
+dependencies = [
+ "cblas-sys",
+ "libc",
+ "num-complex",
+]
+
+[[package]]
+name = "cblas-sys"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6feecd82cce51b0204cf063f0041d69f24ce83f680d87514b004248e7b0fa65"
+dependencies = [
+ "libc",
 ]
 
 [[package]]
@@ -438,18 +473,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "58093314a45e00c77d5c508f76e77c3396afbbc0d01506e7fae47b018bac2b1d"
 
 [[package]]
-name = "matrixmultiply"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "add85d4dd35074e6fedc608f8c8f513a3548619a9024b751949ef0e8e45a4d84"
-dependencies = [
- "num_cpus",
- "once_cell",
- "rawpointer",
- "thread-tree",
-]
-
-[[package]]
 name = "memchr"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -487,6 +510,24 @@ checksum = "d273983c5a657a70a3e8f2a01329822f3b8c8172b73826411a55751e404a0a4a"
 dependencies = [
  "memchr",
  "minimal-lexical",
+]
+
+[[package]]
+name = "num-complex"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02e0d21255c828d6f128a1e41534206671e8c3ea0c62f32291e808dc82cff17d"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
+name = "num-traits"
+version = "0.2.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "578ede34cf02f8924ab9447f50c28075b4d3e5b269972345e7e0372b38c6cdcd"
+dependencies = [
+ "autocfg",
 ]
 
 [[package]]
@@ -624,12 +665,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rawpointer"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "60a357793950651c4ed0f3f52338f53b2f809f32d83a07f72909fa13e4c6c1e3"
-
-[[package]]
 name = "rayon"
 version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -718,10 +753,12 @@ name = "rwkvk-rs"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "blas-src",
+ "blis-src",
  "bytemuck",
+ "cblas",
  "clap",
  "half",
- "matrixmultiply",
  "memmap2",
  "safetensors",
  "tokenizers",
@@ -848,15 +885,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "thread-tree"
-version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ffbd370cb847953a25954d9f63e14824a36113f8c72eecf6eccef5dc4b45d630"
-dependencies = [
- "crossbeam-channel",
 ]
 
 [[package]]
