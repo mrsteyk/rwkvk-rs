@@ -8,7 +8,9 @@ Notable tech stack uses are [memmap2](https://github.com/RazrFalcon/memmap2-rs) 
 
 ### How to install?
 
-```
+This can break and if it does use `--rev` or `--tag` flags to specify which version to install.
+
+```sh
 cargo +nightly install --git https://github.com/mrsteyk/rwkvk-rs --features="build-binary"
 ```
 
