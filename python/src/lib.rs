@@ -11,7 +11,7 @@ enum RwkvError {
 impl std::fmt::Display for RwkvError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            RwkvError::InvalidToken(n) => f.write_fmt(format_args!("Invalid Token: {:?}", n)),
+            RwkvError::InvalidToken(n) => f.write_fmt(format_args!("Invalid Token: {n:?}")),
             RwkvError::EmptyArray => f.write_str("Empty array"),
         }
     }
@@ -79,7 +79,7 @@ impl Rwkv {
 
     pub fn forward_raw_batch(&self, tokens: &PyList, state: &mut State) -> PyResult<Vec<f32>> {
         let tokens: Vec<Vec<f32>> = tokens.extract()?;
-        if tokens.len() == 0 {
+        if tokens.is_empty() {
             return Err(anyhow::anyhow!(RwkvError::EmptyArray).into());
         }
         for token in tokens.iter().take(tokens.len() - 1) {
@@ -116,7 +116,7 @@ impl Rwkv {
 
     pub fn forward(&self, tokens: &PyList, state: &mut State) -> PyResult<Vec<f32>> {
         let tokens: Vec<usize> = tokens.extract()?;
-        if tokens.len() == 0 {
+        if tokens.is_empty() {
             return Err(anyhow::anyhow!(RwkvError::EmptyArray).into());
         }
         for &token in tokens.iter().take(tokens.len() - 1) {

@@ -1,6 +1,6 @@
-use std::{marker::PhantomPinned, pin::Pin, ptr::NonNull, fs::File, mem::MaybeUninit};
+use std::{fs::File, marker::PhantomPinned, mem::MaybeUninit, pin::Pin, ptr::NonNull};
 
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
 use memmap2::Mmap;
 pub use safetensors;
 
@@ -20,8 +20,12 @@ impl<'a> Rwkv<'a> {
 
         // I decided to leave it here for the soft-emb
         let ln0 = rwkv::Ln {
-            weight: model.tensor("blocks.0.ln0.weight").context("failed to get blocks.0.ln0.weight")?,
-            bias: model.tensor("blocks.0.ln0.bias").context("failed to get blocks.0.ln0.bias")?,
+            weight: model
+                .tensor("blocks.0.ln0.weight")
+                .context("failed to get blocks.0.ln0.weight")?,
+            bias: model
+                .tensor("blocks.0.ln0.bias")
+                .context("failed to get blocks.0.ln0.bias")?,
         };
         let emb = { rwkv::EmbOptim::new(&emb, &ln0) };
 
@@ -38,61 +42,93 @@ impl<'a> Rwkv<'a> {
             r + 1
         };
 
-        let head = model.tensor("head.weight").context("error getting head.weight")?;
+        let head = model
+            .tensor("head.weight")
+            .context("error getting head.weight")?;
         let ln_out = rwkv::Ln {
-            weight: model.tensor("ln_out.weight").context("error getting ln_out.weight")?,
-            bias: model.tensor("ln_out.bias").context("error getting ln_out.bias")?,
+            weight: model
+                .tensor("ln_out.weight")
+                .context("error getting ln_out.weight")?,
+            bias: model
+                .tensor("ln_out.bias")
+                .context("error getting ln_out.bias")?,
         };
 
         let mut blocks = Vec::with_capacity(blocks_num);
         for i in 0..blocks_num {
-            let time_decay = model.tensor(&format!("blocks.{i}.att.time_decay")).context("error getting time_decay")?;
-                let time_first = model.tensor(&format!("blocks.{i}.att.time_first")).context("error getting time_first")?;
-                let time_decay = bytemuck::pod_collect_to_vec::<_, f32>(time_decay.data());
-                let time_first = bytemuck::pod_collect_to_vec::<_, f32>(time_first.data());
+            let time_decay = model
+                .tensor(&format!("blocks.{i}.att.time_decay"))
+                .context("error getting time_decay")?;
+            let time_first = model
+                .tensor(&format!("blocks.{i}.att.time_first"))
+                .context("error getting time_first")?;
+            let time_decay = bytemuck::pod_collect_to_vec::<_, f32>(time_decay.data());
+            let time_first = bytemuck::pod_collect_to_vec::<_, f32>(time_first.data());
 
-                let att = rwkv::Att {
-                    key: model.tensor(&format!("blocks.{i}.att.key.weight")).context("error getting att.key.weight")?,
-                    output: model
-                        .tensor(&format!("blocks.{i}.att.output.weight"))
-                        .context("error getting att.output.weight")?,
-                    receptance: model
-                        .tensor(&format!("blocks.{i}.att.receptance.weight"))
-                        .context("error getting att.receptance.weight")?,
-                    // ---
-                    time_decay,
-                    time_first,
-                    // ---
-                    time_mix_k: model.tensor(&format!("blocks.{i}.att.time_mix_k")).context("error getting att.time_mix_k")?,
-                    time_mix_r: model.tensor(&format!("blocks.{i}.att.time_mix_r")).context("error getting att.time_mix_r")?,
-                    time_mix_v: model.tensor(&format!("blocks.{i}.att.time_mix_v")).context("error getting att.time_mix_v")?,
-                    value: model
-                        .tensor(&format!("blocks.{i}.att.value.weight"))
-                        .context("error getting time_decay")?,
-                };
+            let att = rwkv::Att {
+                key: model
+                    .tensor(&format!("blocks.{i}.att.key.weight"))
+                    .context("error getting att.key.weight")?,
+                output: model
+                    .tensor(&format!("blocks.{i}.att.output.weight"))
+                    .context("error getting att.output.weight")?,
+                receptance: model
+                    .tensor(&format!("blocks.{i}.att.receptance.weight"))
+                    .context("error getting att.receptance.weight")?,
+                // ---
+                time_decay,
+                time_first,
+                // ---
+                time_mix_k: model
+                    .tensor(&format!("blocks.{i}.att.time_mix_k"))
+                    .context("error getting att.time_mix_k")?,
+                time_mix_r: model
+                    .tensor(&format!("blocks.{i}.att.time_mix_r"))
+                    .context("error getting att.time_mix_r")?,
+                time_mix_v: model
+                    .tensor(&format!("blocks.{i}.att.time_mix_v"))
+                    .context("error getting att.time_mix_v")?,
+                value: model
+                    .tensor(&format!("blocks.{i}.att.value.weight"))
+                    .context("error getting time_decay")?,
+            };
 
-                let ffn = rwkv::Ffn {
-                    key: model.tensor(&format!("blocks.{i}.ffn.key.weight")).context("error getting ffn.key.weight")?,
-                    receptance: model
-                        .tensor(&format!("blocks.{i}.ffn.receptance.weight"))
-                        .context("error getting ffn.receptance.weight")?,
-                    time_mix_k: model.tensor(&format!("blocks.{i}.ffn.time_mix_k")).context("error getting ffn.time_mix_k")?,
-                    time_mix_r: model.tensor(&format!("blocks.{i}.ffn.time_mix_r")).context("error getting ffn.time_mix_r")?,
-                    value: model
-                        .tensor(&format!("blocks.{i}.ffn.value.weight"))
-                        .context("error getting time_decay")?,
-                };
+            let ffn = rwkv::Ffn {
+                key: model
+                    .tensor(&format!("blocks.{i}.ffn.key.weight"))
+                    .context("error getting ffn.key.weight")?,
+                receptance: model
+                    .tensor(&format!("blocks.{i}.ffn.receptance.weight"))
+                    .context("error getting ffn.receptance.weight")?,
+                time_mix_k: model
+                    .tensor(&format!("blocks.{i}.ffn.time_mix_k"))
+                    .context("error getting ffn.time_mix_k")?,
+                time_mix_r: model
+                    .tensor(&format!("blocks.{i}.ffn.time_mix_r"))
+                    .context("error getting ffn.time_mix_r")?,
+                value: model
+                    .tensor(&format!("blocks.{i}.ffn.value.weight"))
+                    .context("error getting time_decay")?,
+            };
 
-                let ln1 = rwkv::Ln {
-                    weight: model.tensor(&format!("blocks.{i}.ln1.weight")).context("error getting ln1.weight")?,
-                    bias: model.tensor(&format!("blocks.{i}.ln1.bias")).context("error getting ln1.bias")?,
-                };
-                let ln2 = rwkv::Ln {
-                    weight: model.tensor(&format!("blocks.{i}.ln2.weight")).context("error getting ln2.weight")?,
-                    bias: model.tensor(&format!("blocks.{i}.ln2.bias")).context("error getting ln2.bias")?,
-                };
+            let ln1 = rwkv::Ln {
+                weight: model
+                    .tensor(&format!("blocks.{i}.ln1.weight"))
+                    .context("error getting ln1.weight")?,
+                bias: model
+                    .tensor(&format!("blocks.{i}.ln1.bias"))
+                    .context("error getting ln1.bias")?,
+            };
+            let ln2 = rwkv::Ln {
+                weight: model
+                    .tensor(&format!("blocks.{i}.ln2.weight"))
+                    .context("error getting ln2.weight")?,
+                bias: model
+                    .tensor(&format!("blocks.{i}.ln2.bias"))
+                    .context("error getting ln2.bias")?,
+            };
 
-                blocks.push(Block { att, ffn, ln1, ln2 })
+            blocks.push(Block { att, ffn, ln1, ln2 })
         }
 
         Ok(rwkv::Rwkv {
@@ -126,7 +162,7 @@ impl<'a> RwkvWrap<'a> {
             // Blergh...
             map: unsafe { MaybeUninit::zeroed().assume_init() },
             rwkv: None,
-            _pin: PhantomPinned
+            _pin: PhantomPinned,
         };
 
         // Welcome to Rust!
@@ -135,7 +171,8 @@ impl<'a> RwkvWrap<'a> {
         let model_ref = NonNull::from(&boxed.model);
         unsafe {
             let mut_ref: Pin<&mut Self> = Pin::as_mut(&mut boxed);
-            Pin::get_unchecked_mut(mut_ref).rwkv = Some(Rwkv::from_safetensors(model_ref.as_ref())?);
+            Pin::get_unchecked_mut(mut_ref).rwkv =
+                Some(Rwkv::from_safetensors(model_ref.as_ref())?);
         }
 
         Ok(boxed)
@@ -158,13 +195,15 @@ impl<'a> RwkvWrap<'a> {
         let map_ref = NonNull::from(&boxed.map);
         unsafe {
             let mut_ref: Pin<&mut Self> = Pin::as_mut(&mut boxed);
-            Pin::get_unchecked_mut(mut_ref).model = SafeTensors::deserialize(&map_ref.as_ref()[..])?;
+            Pin::get_unchecked_mut(mut_ref).model =
+                SafeTensors::deserialize(&map_ref.as_ref()[..])?;
         }
 
         let model_ref = NonNull::from(&boxed.model);
         unsafe {
             let mut_ref: Pin<&mut Self> = Pin::as_mut(&mut boxed);
-            Pin::get_unchecked_mut(mut_ref).rwkv = Some(Rwkv::from_safetensors(model_ref.as_ref())?);
+            Pin::get_unchecked_mut(mut_ref).rwkv =
+                Some(Rwkv::from_safetensors(model_ref.as_ref())?);
         }
 
         Ok(boxed)
@@ -191,7 +230,12 @@ mod test {
             };
             model.as_ref().rwkv.as_ref().unwrap().blocks.len()
         ];
-        model.as_ref().rwkv.as_ref().unwrap().forward_raw_preproc(&[0f32; 1024], &mut state);
+        model
+            .as_ref()
+            .rwkv
+            .as_ref()
+            .unwrap()
+            .forward_raw_preproc(&[0f32; 1024], &mut state);
     }
 
     #[test]
@@ -211,6 +255,11 @@ mod test {
             };
             model.as_ref().rwkv.as_ref().unwrap().blocks.len()
         ];
-        model.as_ref().rwkv.as_ref().unwrap().forward_raw_preproc(&[0f32; 1024], &mut state);
+        model
+            .as_ref()
+            .rwkv
+            .as_ref()
+            .unwrap()
+            .forward_raw_preproc(&[0f32; 1024], &mut state);
     }
 }

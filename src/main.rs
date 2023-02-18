@@ -238,13 +238,11 @@ fn main() -> Result<()> {
                     rwkv.forward_raw_preproc(&x, &mut state);
                 }),
             // Small performance penalty?
-            safetensors::tensor::Dtype::F32 => {
-                bytemuck::pod_collect_to_vec::<_, f32>(soft.data())
-                    .chunks_exact(soft.shape()[1])
-                    .for_each(|x| {
-                        rwkv.forward_raw_preproc(x, &mut state);
-                    })
-            }
+            safetensors::tensor::Dtype::F32 => bytemuck::pod_collect_to_vec::<_, f32>(soft.data())
+                .chunks_exact(soft.shape()[1])
+                .for_each(|x| {
+                    rwkv.forward_raw_preproc(x, &mut state);
+                }),
             _ => unreachable!(),
         }
     }
