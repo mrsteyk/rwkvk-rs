@@ -34,6 +34,12 @@ Either download one from [hf:mrsteyk/RWKV-LM-safetensors](https://huggingface.co
 
 ### I get some weird errors when I try to use models I converted myself?
 
+#### UPDATE
+
+Update your `safetensors` version! [gh:huggingface/safetensors#148](https://github.com/huggingface/safetensors/pull/148) got merged!
+
+#### OLD (kept for historic purposes)
+
 See [gh:huggingface/safetensors#178](https://github.com/huggingface/safetensors/issues/178).
 
 TL;DR you need to pad the header, no need to reorder tensors because I copy `time_` tensors (for now at least).
