@@ -6,6 +6,12 @@ Notable tech stack uses are [memmap2](https://github.com/RazrFalcon/memmap2-rs) 
 
 ## FAQ
 
+### Are there other projects?
+
+Yes!
+
+- <https://github.com/KerfuffleV2/smolrsrwkv>
+
 ### How to install?
 
 This can break and if it does use `--rev` or `--tag` flags to specify which version to install.
